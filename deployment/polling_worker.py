@@ -1,0 +1,8195 @@
+#!/usr/bin/env python3
+"""
+混合云轮询 Worker
+
+功能：
+1. 定期轮询阿里云 API，获取待处理任务
+2. 下载任务输入数据
+3. 生成 LAMMPS/Gaussian 输入文件
+4. 提交到 Slurm 集群
+5. 监控任务状态
+6. 上传结果到阿里云 OSS
+7. 更新任务状态
+"""
+
+import os
+import sys
+import time
+import yaml
+import logging
+import requests
+import subprocess
+import json
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime
+
+# 添加项目路径
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+
+try:
+    from qcloud_cos import CosConfig, CosS3Client
+except ImportError:
+    print("请安装腾讯云 COS SDK: pip install cos-python-sdk-v5")
+    sys.exit(1)
+
+
+class PollingWorker:
+    """轮询 Worker 主类"""
+    
+    def __init__(self, config_path: str = "deployment/polling_worker_config.yaml"):
+        """初始化 Worker"""
+        # 加载配置
+        self.config = self._load_config(config_path)
+        
+        # 设置日志
+        self._setup_logging()
+        
+        # 初始化 OSS 客户端
+        self._init_oss_client()
+        
+        # 初始化 API 客户端
+        self._init_api_client()
+        
+        # 当前运行的任务
+        self.running_jobs: Dict[int, Dict] = {}
+        
+        self.logger.info(f"Worker '{self.config['worker']['name']}' 已启动")
+    
+    def _load_config(self, config_path: str) -> Dict:
+        """加载配置文件"""
+        config_file = Path(config_path)
+        if not config_file.exists():
+            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    
+    def _setup_logging(self):
+        """设置日志"""
+        log_file = self.config['worker']['log_file']
+        log_level = getattr(logging, self.config['worker']['log_level'])
+        
+        logging.basicConfig(
+            level=log_level,
+            format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger('PollingWorker')
+    
+    def _init_oss_client(self):
+        """初始化 COS 客户端（腾讯云对象存储）"""
+        # 支持两种配置：阿里云 OSS 或腾讯云 COS
+        if 'cos' in self.config:
+            # 腾讯云 COS
+            cos_config = self.config['cos']
+            config = CosConfig(
+                Region=cos_config['region'],
+                SecretId=cos_config['secret_id'],
+                SecretKey=cos_config['secret_key'],
+                Scheme='https'
+            )
+            self.cos_client = CosS3Client(config)
+            self.cos_bucket = cos_config['bucket']
+            self.storage_type = 'cos'
+            self.logger.info(f"腾讯云 COS 客户端已初始化 (Bucket: {self.cos_bucket})")
+        elif 'oss' in self.config:
+            # 阿里云 OSS（向后兼容）
+            import oss2
+            oss_config = self.config['oss']
+            auth = oss2.Auth(
+                oss_config['access_key_id'],
+                oss_config['access_key_secret']
+            )
+            self.oss_bucket = oss2.Bucket(
+                auth,
+                oss_config['endpoint'],
+                oss_config['bucket_name']
+            )
+            self.storage_type = 'oss'
+            self.logger.info("阿里云 OSS 客户端已初始化")
+        else:
+            raise ValueError("配置文件中必须包含 'cos' 或 'oss' 配置")
+    
+    def _init_api_client(self):
+        """初始化 API 客户端"""
+        self.api_base_url = self.config['api']['base_url']
+        self.api_headers = {
+            'Authorization': f'Bearer {self.config["api"]["worker_token"]}',
+            'Content-Type': 'application/json'
+        }
+        self.logger.info(f"API 客户端已初始化: {self.api_base_url}")
+    
+    def run(self):
+        """主循环"""
+        self.logger.info("开始轮询...")
+
+        # 恢复运行中的任务
+        self._recover_running_jobs()
+
+        last_heartbeat = time.time()
+        last_check_api_running_jobs = time.time()  # 定期检查 API 中的 RUNNING 任务
+        last_sync_anion_library = time.time()  # 定期同步 initial_salts 文件夹和数据库
+
+        while True:
+            try:
+                # 发送心跳
+                if time.time() - last_heartbeat > self.config['worker']['heartbeat_interval']:
+                    self._send_heartbeat()
+                    last_heartbeat = time.time()
+
+                # 检查运行中的任务
+                self._check_running_jobs()
+
+                # 检查阴离子生成任务
+                self._check_running_tasks_on_startup()
+
+                # 定期检查 API 中的 RUNNING 状态任务（每 5 分钟检查一次）
+                # 这是一个容错机制，用于处理 Worker 启动后新增的 RUNNING 任务
+                if time.time() - last_check_api_running_jobs > 300:  # 5 分钟
+                    self._check_api_running_jobs_for_completion()
+                    last_check_api_running_jobs = time.time()
+
+                # 定期同步 initial_salts 文件夹和数据库（每 10 分钟检查一次）
+                if time.time() - last_sync_anion_library > 600:  # 10 分钟
+                    self._sync_anion_library_with_filesystem()
+                    last_sync_anion_library = time.time()
+
+                # 获取新任务
+                max_jobs = self.config['worker']['max_concurrent_jobs']
+                current_jobs = len(self.running_jobs)
+                if current_jobs < max_jobs:
+                    self._fetch_and_process_new_jobs()
+                else:
+                    self.logger.info(f"当前运行任务数 ({current_jobs}) 已达到最大并发数 ({max_jobs})，跳过拉取新任务")
+                    self.logger.debug(f"运行中的任务: {list(self.running_jobs.keys())}")
+
+                # 等待下一次轮询
+                time.sleep(self.config['api']['poll_interval'])
+
+            except KeyboardInterrupt:
+                self.logger.info("收到中断信号，正在退出...")
+                break
+            except Exception as e:
+                self.logger.error(f"主循环错误: {e}", exc_info=True)
+                time.sleep(10)
+
+    def _recover_running_jobs(self):
+        """恢复运行中的任务（Worker 重启后恢复追踪）"""
+        self.logger.info("正在恢复运行中的任务...")
+
+        # 首先恢复阴离子生成任务
+        self._check_running_tasks_on_startup()
+
+        try:
+            # 获取当前 Slurm 中运行的任务
+            result = subprocess.run(
+                ['squeue', '-u', os.environ.get('USER', 'xiaoji'),
+                 '-o', '%i %j', '-h'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode != 0:
+                self.logger.error(f"获取 Slurm 队列失败: {result.stderr}")
+                return
+
+            running_slurm_jobs = {}
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        slurm_job_id = parts[0]
+                        job_name = parts[1]
+                        running_slurm_jobs[job_name] = slurm_job_id
+
+            self.logger.info(f"Slurm 中运行的任务: {running_slurm_jobs}")
+
+            # 从 API 获取状态为 RUNNING 的 MD 任务
+            response = requests.get(
+                f"{self.api_base_url}/workers/jobs/running",
+                headers=self.api_headers,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code != 200:
+                self.logger.warning(f"获取运行中任务失败: {response.status_code}")
+                # 尝试从本地工作目录恢复
+                self._recover_from_local_dirs(running_slurm_jobs)
+                return
+
+            running_jobs = response.json()
+            self.logger.info(f"API 返回运行中的任务: {len(running_jobs)} 个")
+
+            # 用于收集需要检查状态的任务
+            jobs_to_check = []
+
+            for job in running_jobs:
+                job_id = job['id']
+                job_type = job.get('type', 'MD').lower()
+                slurm_job_id = job.get('slurm_job_id')
+                work_dir = job.get('work_dir')
+
+                if not slurm_job_id or not work_dir:
+                    continue
+
+                # 检查 Slurm 任务是否仍在运行
+                if slurm_job_id in running_slurm_jobs.values():
+                    # 任务仍在运行，恢复追踪
+                    self.running_jobs[job_id] = {
+                        'type': job_type,
+                        'slurm_job_id': slurm_job_id,
+                        'work_dir': work_dir,
+                        'start_time': time.time(),
+                        'resp_cpu_hours': 0.0
+                    }
+                    self.logger.info(f"恢复追踪任务 {job_id} (Slurm: {slurm_job_id})")
+                else:
+                    # 任务不在 Slurm 队列中，可能已完成或失败，需要检查状态
+                    self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 不在队列中，检查状态...")
+                    jobs_to_check.append({
+                        'job_id': job_id,
+                        'job_type': job_type,
+                        'slurm_job_id': slurm_job_id,
+                        'work_dir': work_dir
+                    })
+
+            self.logger.info(f"恢复了 {len(self.running_jobs)} 个运行中的任务")
+
+            # 检查并更新已完成/失败的任务
+            if jobs_to_check:
+                self.logger.info(f"检查 {len(jobs_to_check)} 个可能已完成的任务...")
+                self._check_and_update_completed_jobs(jobs_to_check)
+
+        except Exception as e:
+            self.logger.error(f"恢复运行中任务失败: {e}", exc_info=True)
+
+    def _check_and_update_completed_jobs(self, jobs_to_check: List[Dict]):
+        """检查并更新已完成/失败的任务状态"""
+        for job_info in jobs_to_check:
+            try:
+                job_id = job_info['job_id']
+                job_type = job_info['job_type']
+                slurm_job_id = job_info['slurm_job_id']
+                work_dir = job_info['work_dir']
+
+                # 检查 Slurm 任务状态，同时传入工作目录用于容错恢复
+                status = self._check_slurm_status(slurm_job_id, work_dir)
+
+                if status == 'COMPLETED':
+                    self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 已完成，开始处理结果...")
+                    # 临时添加到 running_jobs 以便 _handle_job_completion 可以处理
+                    temp_job_info = {
+                        'type': job_type,
+                        'slurm_job_id': slurm_job_id,
+                        'work_dir': work_dir,
+                        'start_time': time.time(),
+                        'resp_cpu_hours': 0.0
+                    }
+                    self._handle_job_completion(job_id, temp_job_info)
+
+                elif status == 'FAILED':
+                    self.logger.error(f"任务 {job_id} (Slurm: {slurm_job_id}) 失败")
+                    error_msg = self._get_job_failure_reason(slurm_job_id, work_dir)
+                    # 获取 CPU 核时，即使任务失败也要记录
+                    cpu_hours = self._get_job_cpu_hours(slurm_job_id)
+                    self.logger.info(f"任务 {job_id} 失败时的 CPU hours: {cpu_hours:.2f}")
+                    self._update_job_status(job_id, 'FAILED', job_type, error_message=error_msg, cpu_hours=cpu_hours)
+
+                elif status == 'CANCELLED':
+                    self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 已取消")
+                    self._update_job_status(job_id, 'CANCELLED', job_type, error_message="任务被取消")
+
+                else:
+                    self.logger.warning(f"任务 {job_id} (Slurm: {slurm_job_id}) 状态未知: {status}")
+
+            except Exception as e:
+                self.logger.error(f"检查任务 {job_info.get('job_id')} 状态失败: {e}", exc_info=True)
+
+    def _check_api_running_jobs_for_completion(self):
+        """
+        定期检查 API 中的 RUNNING 状态任务是否已完成
+
+        这是一个容错机制，用于处理以下情况：
+        1. Worker 启动后新增的 RUNNING 任务
+        2. Polling Worker 因为某些原因没有检查到的已完成任务
+        """
+        try:
+            self.logger.debug("检查 API 中的 RUNNING 状态任务...")
+
+            # 从 API 获取所有 RUNNING 状态的任务
+            response = requests.get(
+                f"{self.api_base_url}/workers/jobs/running",
+                headers=self.api_headers,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code != 200:
+                self.logger.warning(f"获取 RUNNING 任务失败: {response.status_code}")
+                return
+
+            running_jobs = response.json()
+            if not running_jobs:
+                return
+
+            self.logger.debug(f"发现 {len(running_jobs)} 个 RUNNING 状态的任务")
+
+            # 检查每个 RUNNING 任务是否已完成
+            jobs_to_check = []
+            for job in running_jobs:
+                job_id = job['id']
+                job_type = job.get('type', 'MD').lower()
+                slurm_job_id = job.get('slurm_job_id')
+                work_dir = job.get('work_dir')
+
+                if not slurm_job_id or not work_dir:
+                    continue
+
+                # 检查 Slurm 任务是否仍在运行
+                result = subprocess.run(
+                    ['squeue', '-j', slurm_job_id, '-h', '-o', '%T'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode != 0 or not result.stdout.strip():
+                    # 任务不在队列中，可能已完成或失败
+                    self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 不在队列中，检查状态...")
+                    jobs_to_check.append({
+                        'job_id': job_id,
+                        'job_type': job_type,
+                        'slurm_job_id': slurm_job_id,
+                        'work_dir': work_dir
+                    })
+
+            # 检查并更新已完成/失败的任务
+            if jobs_to_check:
+                self.logger.info(f"检查 {len(jobs_to_check)} 个可能已完成的 RUNNING 任务...")
+                self._check_and_update_completed_jobs(jobs_to_check)
+
+        except Exception as e:
+            self.logger.error(f"检查 API RUNNING 任务失败: {e}", exc_info=True)
+
+    def _recover_from_local_dirs(self, running_slurm_jobs: Dict[str, str]):
+        """从本地工作目录恢复任务追踪"""
+        md_work_dir = Path(self.config['local']['work_base_path'])
+
+        for job_name, slurm_job_id in running_slurm_jobs.items():
+            # 尝试从任务名解析任务 ID
+            # 任务名格式: MD-{job_id}-{system_name}
+            if job_name.startswith('MD-'):
+                parts = job_name.split('-')
+                if len(parts) >= 2:
+                    try:
+                        # 从工作目录名中提取任务 ID
+                        for work_dir in md_work_dir.iterdir():
+                            if work_dir.is_dir() and job_name in work_dir.name:
+                                # 尝试从 slurm 脚本中获取任务 ID
+                                slurm_script = work_dir / "run_md.slurm"
+                                if slurm_script.exists():
+                                    # 从目录名解析任务 ID
+                                    # 格式: MD-{date}-{job_id}-EL-...
+                                    dir_parts = work_dir.name.split('-')
+                                    if len(dir_parts) >= 3:
+                                        job_id_str = dir_parts[2]  # 第三部分是任务 ID
+                                        job_id = int(job_id_str)
+
+                                        self.running_jobs[job_id] = {
+                                            'type': 'md',
+                                            'slurm_job_id': slurm_job_id,
+                                            'work_dir': str(work_dir),
+                                            'start_time': time.time(),
+                                            'resp_cpu_hours': 0.0
+                                        }
+                                        self.logger.info(f"从本地目录恢复任务 {job_id} (Slurm: {slurm_job_id})")
+                                        break
+                    except (ValueError, IndexError):
+                        continue
+    
+    def _get_slurm_partitions(self) -> List[Dict]:
+        """获取 Slurm 分区信息"""
+        partitions = []
+        try:
+            # 使用 sinfo 获取分区信息
+            cmd = ["sinfo", "--format=%P|%a|%D|%C|%l", "--noheader"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+            if result.returncode != 0:
+                self.logger.warning(f"sinfo 命令失败: {result.stderr}")
+                return partitions
+
+            for line in result.stdout.strip().split("\n"):
+                if not line:
+                    continue
+
+                fields = line.split("|")
+                if len(fields) < 4:
+                    continue
+
+                name = fields[0].rstrip("*")  # 移除默认分区的 * 标记
+                state = fields[1]
+                total_nodes = int(fields[2]) if fields[2].isdigit() else 0
+
+                # 解析 CPU 信息 (格式: A/I/O/T - Allocated/Idle/Other/Total)
+                cpu_info = fields[3].split("/")
+                if len(cpu_info) >= 4:
+                    allocated = int(cpu_info[0]) if cpu_info[0].isdigit() else 0
+                    idle = int(cpu_info[1]) if cpu_info[1].isdigit() else 0
+                    total = int(cpu_info[3]) if cpu_info[3].isdigit() else 0
+                else:
+                    allocated = idle = total = 0
+
+                max_time = fields[4] if len(fields) > 4 else None
+
+                partitions.append({
+                    "name": name,
+                    "state": state,
+                    "total_nodes": total_nodes,
+                    "available_nodes": total_nodes,  # 简化处理
+                    "total_cpus": total,
+                    "available_cpus": idle,
+                    "max_time": max_time,
+                })
+
+            self.logger.debug(f"获取到 {len(partitions)} 个分区信息")
+
+        except subprocess.TimeoutExpired:
+            self.logger.error("sinfo 命令超时")
+        except FileNotFoundError:
+            self.logger.warning("sinfo 命令未找到（可能不在 Slurm 环境中）")
+        except Exception as e:
+            self.logger.error(f"获取分区信息失败: {e}")
+
+        return partitions
+
+    def _send_heartbeat(self):
+        """发送心跳到云端（同时上报分区信息）"""
+        try:
+            # 获取当前分区信息
+            partitions = self._get_slurm_partitions()
+
+            data = {
+                'worker_name': self.config['worker']['name'],
+                'status': 'running',
+                'running_jobs': len(self.running_jobs),
+                'timestamp': datetime.now().isoformat(),
+                'partitions': partitions  # 上报分区信息
+            }
+
+            response = requests.post(
+                f"{self.api_base_url}/workers/heartbeat",
+                headers=self.api_headers,
+                json=data,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                self.logger.debug(f"心跳已发送: {len(self.running_jobs)} 个任务运行中, {len(partitions)} 个分区")
+            else:
+                self.logger.warning(f"发送心跳失败: {response.status_code} - {response.text}")
+
+        except Exception as e:
+            self.logger.warning(f"发送心跳失败: {e}")
+    
+    def _fetch_and_process_new_jobs(self):
+        """获取并处理新任务"""
+        try:
+            # 获取待处理的 MD 任务
+            md_jobs = self._fetch_pending_jobs('md')
+            for job in md_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_md_job(job)
+
+            # 获取待处理的 QC 任务
+            qc_jobs = self._fetch_pending_jobs('qc')
+            for job in qc_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_qc_job(job)
+
+            # 获取待处理的后处理任务（包括去溶剂化能计算）
+            postprocess_jobs = self._fetch_pending_jobs('postprocess')
+            for job in postprocess_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_postprocess_job(job)
+
+            # 获取待处理的 Binding 分析任务
+            binding_jobs = self._fetch_pending_jobs('binding')
+            for job in binding_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_binding_job(job)
+
+            # 获取待处理的 Redox 热力学循环任务
+            redox_jobs = self._fetch_pending_jobs('redox')
+            for job in redox_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_redox_job(job)
+
+            # 获取待处理的重组能计算任务
+            reorg_jobs = self._fetch_pending_jobs('reorg')
+            for job in reorg_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_reorg_energy_job(job)
+
+            # 获取待处理的 Cluster 高级计算任务
+            cluster_analysis_jobs = self._fetch_pending_jobs('cluster_analysis')
+            for job in cluster_analysis_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_cluster_analysis_job(job)
+
+            # 获取待处理的阴离子生成任务
+            anion_generation_jobs = self._fetch_pending_jobs('anion_generation')
+            for job in anion_generation_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_anion_generation_job(job)
+
+            # 检查等待 QC 任务完成的 Cluster 高级计算任务
+            self._check_waiting_cluster_analysis_jobs()
+
+            # 检查等待 QC 任务完成的去溶剂化任务（通过 API 调用后端处理）
+            self._check_waiting_desolvation_jobs_via_api()
+
+            # 获取待处理的阴离子生成任务
+            anion_generation_jobs = self._fetch_pending_jobs('anion_generation')
+            for job in anion_generation_jobs:
+                if len(self.running_jobs) >= self.config['worker']['max_concurrent_jobs']:
+                    break
+                self._process_anion_generation_job(job)
+
+        except Exception as e:
+            self.logger.error(f"获取新任务失败: {e}", exc_info=True)
+    
+    def _fetch_pending_jobs(self, job_type: str) -> List[Dict]:
+        """从云端获取待处理任务（根据当前worker支持的分区过滤）"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/pending"
+            params = {
+                'job_type': job_type.upper(),
+                'limit': 10,
+                'worker_name': self.config['worker']['name']  # 传递worker名称用于分区过滤
+            }
+
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                params=params,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                jobs = response.json()
+                self.logger.info(f"获取到 {len(jobs)} 个待处理的 {job_type.upper()} 任务（已根据支持的分区过滤）")
+                return jobs
+            else:
+                self.logger.warning(f"获取任务失败: {response.status_code}")
+                return []
+
+        except Exception as e:
+            self.logger.error(f"获取 {job_type} 任务失败: {e}")
+            return []
+    
+    def _process_md_job(self, job: Dict):
+        """处理 MD 任务"""
+        job_id = job['id']
+        self.logger.info(f"开始处理 MD 任务 {job_id}")
+
+        try:
+            # 1. 立即更新任务状态为 QUEUED（表示 Worker 已接收，正在准备）
+            self._update_job_status(job_id, 'QUEUED', 'md')
+
+            # 2. 导入模块
+            from app.workers.molyte_wrapper import MolyteWrapper
+            from app.workers.resp_calculator import RESPCalculator
+            from app.core.config import settings
+
+            # 3. 初始化 MolyteWrapper
+            wrapper = MolyteWrapper(
+                work_base_path=Path(self.config['local']['work_base_path']),
+                initial_salts_path=Path(self.config['local']['initial_salts_path']),
+                ligpargen_path=Path(self.config['local']['ligpargen_path']),
+                packmol_path=Path(self.config['local']['packmol_path']),
+                ltemplify_path=Path(self.config['local']['ltemplify_path']),
+                moltemplate_path=Path(self.config['local']['moltemplate_path']),
+                charge_save_path=Path(self.config['local']['charge_save_path']),
+            )
+
+            job_data = job['config']
+            charge_method = job_data.get("charge_method", "ligpargen")
+
+            # 4. 检查是否需要 RESP 计算
+            if charge_method == "resp":
+                solvents = job_data.get("solvents", [])
+                solvents_needing_resp = wrapper.get_solvents_needing_resp(solvents)
+
+                if solvents_needing_resp:
+                    # 需要先运行 RESP 计算
+                    self.logger.info(f"MD 任务 {job_id} 需要 RESP 计算: {[s['name'] for s in solvents_needing_resp]}")
+                    self._start_resp_calculations(job_id, job, solvents_needing_resp, wrapper)
+                    return  # RESP 完成后会继续 MD
+
+            # 5. 直接生成 LAMMPS 输入文件（无需 RESP 或 RESP 已完成）
+            self._continue_md_job(job_id, job, wrapper)
+
+        except Exception as e:
+            self.logger.error(f"处理 MD 任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'md', error_message=str(e))
+
+    def _start_resp_calculations(self, job_id: int, job: Dict, solvents: List[Dict], wrapper):
+        """
+        启动 RESP 电荷计算
+
+        Args:
+            job_id: MD 任务 ID
+            job: 任务配置
+            solvents: 需要计算的溶剂列表
+            wrapper: MolyteWrapper 实例
+        """
+        from app.workers.resp_calculator import RESPCalculator
+        import shutil
+
+        try:
+            # 创建 RESP 工作目录
+            resp_base_dir = Path(self.config['local']['work_base_path']) / f"RESP_{job['config']['name']}"
+            resp_base_dir.mkdir(parents=True, exist_ok=True)
+
+            # 初始化 RESP 计算器
+            # 优先使用 MD 任务的 Slurm 队列配置，确保 RESP 计算与 MD 任务使用相同的资源队列
+            md_config = job.get('config', {})
+            slurm_partition = md_config.get('slurm_partition', self.config.get('slurm', {}).get('partition', 'cpu'))
+
+            self.logger.info(f"RESP 计算将使用 Slurm 队列: {slurm_partition} (继承自 MD 任务配置)")
+
+            resp_calculator = RESPCalculator(
+                charge_save_path=Path(self.config['local']['charge_save_path']),
+                slurm_partition=slurm_partition
+            )
+
+            resp_jobs = []
+
+            for solvent in solvents:
+                name = solvent['name']
+                smiles = solvent.get('smiles', '')
+
+                if not smiles:
+                    self.logger.warning(f"No SMILES for solvent {name}, skipping RESP")
+                    continue
+
+                # 为每个溶剂创建工作目录
+                solvent_dir = resp_base_dir / name
+                solvent_dir.mkdir(parents=True, exist_ok=True)
+
+                # 运行 LigParGen 生成 PDB 文件
+                import subprocess
+                ligpargen_cmd = f"{self.config['local']['ligpargen_path']}/ligpargen -s '{smiles}' -n {name} -r MOL -c 0 -o 0 -cgen CM1A"
+                result = subprocess.run(
+                    ligpargen_cmd, shell=True, cwd=str(solvent_dir),
+                    capture_output=True, text=True
+                )
+
+                if result.returncode != 0:
+                    self.logger.error(f"LigParGen failed for {name}: {result.stderr}")
+                    continue
+
+                # 生成 RESP Slurm 脚本
+                pdb_file = f"{name}.charmm.pdb"
+                script_path = resp_calculator.generate_resp_slurm_script(
+                    work_dir=solvent_dir,
+                    pdb_file=pdb_file,
+                    molecule_name=name,
+                    charge=0,
+                    spin_multiplicity=1,
+                    solvent="water",
+                    cpus=16,
+                    time_limit_hours=24
+                )
+
+                # 提交到 Slurm
+                success, slurm_job_id, error = resp_calculator.submit_resp_job(solvent_dir, script_path)
+
+                if success:
+                    resp_jobs.append({
+                        'molecule_name': name,
+                        'slurm_job_id': slurm_job_id,
+                        'work_dir': str(solvent_dir),
+                        'status': 'RUNNING',
+                        'cpu_hours': 0.0
+                    })
+                    self.logger.info(f"RESP 任务已提交: {name} (Slurm Job: {slurm_job_id})")
+                else:
+                    self.logger.error(f"Failed to submit RESP job for {name}: {error}")
+
+            if resp_jobs:
+                # 将 MD 任务添加到等待 RESP 的队列
+                self.running_jobs[job_id] = {
+                    'type': 'md_waiting_resp',
+                    'job': job,
+                    'wrapper': wrapper,
+                    'resp_jobs': resp_jobs,
+                    'resp_base_dir': str(resp_base_dir),
+                    'start_time': time.time(),
+                    'total_resp_cpu_hours': 0.0
+                }
+                self.logger.info(f"MD 任务 {job_id} 正在等待 {len(resp_jobs)} 个 RESP 计算完成")
+            else:
+                # 没有成功提交任何 RESP 任务，直接继续 MD（使用 LigParGen 电荷）
+                self.logger.warning(f"No RESP jobs submitted for MD job {job_id}, falling back to LigParGen")
+                job['config']['charge_method'] = 'ligpargen'
+                self._continue_md_job(job_id, job, wrapper)
+
+        except Exception as e:
+            self.logger.error(f"启动 RESP 计算失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'md', error_message=f"RESP calculation failed: {e}")
+
+    def _check_resp_jobs(self, job_id: int, job_info: Dict) -> Tuple[bool, bool]:
+        """
+        检查 RESP 任务状态
+
+        Args:
+            job_id: MD 任务 ID
+            job_info: 任务信息
+
+        Returns:
+            (是否所有 RESP 任务都已完成, 是否有任何 RESP 任务失败)
+        """
+        from app.workers.resp_calculator import RESPCalculator
+
+        resp_calculator = RESPCalculator(
+            charge_save_path=Path(self.config['local']['charge_save_path'])
+        )
+
+        all_completed = True
+        any_failed = False
+        total_cpu_hours = 0.0
+
+        for resp_job in job_info['resp_jobs']:
+            if resp_job['status'] in ['COMPLETED', 'FAILED']:
+                total_cpu_hours += resp_job.get('cpu_hours', 0.0)
+                if resp_job['status'] == 'FAILED':
+                    any_failed = True
+                continue
+
+            status = resp_calculator.check_job_status(resp_job['slurm_job_id'])
+
+            if status in ['PENDING', 'RUNNING']:
+                all_completed = False
+            elif status == 'COMPLETED':
+                resp_job['status'] = 'COMPLETED'
+                resp_job['cpu_hours'] = resp_calculator.get_job_cpu_hours(resp_job['slurm_job_id'])
+                total_cpu_hours += resp_job['cpu_hours']
+                self.logger.info(f"RESP 计算完成: {resp_job['molecule_name']} (CPU hours: {resp_job['cpu_hours']:.2f})")
+            else:
+                resp_job['status'] = 'FAILED'
+                any_failed = True
+                self.logger.error(f"RESP 计算失败: {resp_job['molecule_name']} (status: {status})")
+
+        job_info['total_resp_cpu_hours'] = total_cpu_hours
+
+        if any_failed:
+            # 有 RESP 任务失败，需要回退到 LigParGen 电荷
+            self.logger.warning(f"Some RESP jobs failed for MD job {job_id}, will use LigParGen for failed molecules")
+
+        return all_completed, any_failed
+
+    def _continue_md_job(self, job_id: int, job: Dict, wrapper):
+        """
+        继续 MD 任务（RESP 完成后或不需要 RESP）
+
+        Args:
+            job_id: MD 任务 ID
+            job: 任务配置
+            wrapper: MolyteWrapper 实例
+        """
+        try:
+            job_data = job['config']
+
+            # 生成 LAMMPS 输入文件
+            result = wrapper.generate_lammps_input(job_data)
+
+            if not result['success']:
+                raise Exception(result.get('error', 'Unknown error'))
+
+            work_dir = result['work_dir']
+
+            # 提交到 Slurm
+            slurm_result = wrapper.submit_to_slurm(work_dir)
+
+            if not slurm_result['success']:
+                raise Exception(slurm_result.get('error', 'Failed to submit to Slurm'))
+
+            slurm_job_id = slurm_result['slurm_job_id']
+
+            # 获取 RESP CPU 核时数
+            resp_cpu_hours = 0.0
+            if job_id in self.running_jobs and self.running_jobs[job_id].get('type') == 'md_waiting_resp':
+                resp_cpu_hours = self.running_jobs[job_id].get('total_resp_cpu_hours', 0.0)
+
+            # 更新任务状态为 RUNNING
+            self._update_job_status(
+                job_id, 'RUNNING', 'md',
+                slurm_job_id=slurm_job_id,
+                work_dir=str(work_dir)
+            )
+
+            # 更新运行中的任务列表
+            self.running_jobs[job_id] = {
+                'type': 'md',
+                'slurm_job_id': slurm_job_id,
+                'work_dir': work_dir,
+                'start_time': time.time(),
+                'resp_cpu_hours': resp_cpu_hours  # 保存 RESP 核时数
+            }
+
+            self.logger.info(f"MD 任务 {job_id} 已提交到 Slurm (Job ID: {slurm_job_id}), RESP CPU hours: {resp_cpu_hours:.2f}")
+
+        except Exception as e:
+            self.logger.error(f"继续 MD 任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'md', error_message=str(e))
+    
+    def _process_qc_job(self, job: Dict):
+        """处理 QC 任务"""
+        job_id = job['id']
+        self.logger.info(f"开始处理 QC 任务 {job_id}")
+
+        try:
+            # 0. 检查任务是否已经在处理中（避免重复处理）
+            # 如果任务已经在 running_jobs 中，说明正在处理，跳过
+            if job_id in self.running_jobs:
+                self.logger.info(f"QC 任务 {job_id} 已在处理中，跳过")
+                return
+
+            # 1. 立即更新任务状态为 QUEUED（表示 Worker 已接收，正在准备）
+            self._update_job_status(job_id, 'QUEUED', 'qc')
+
+            # 2. 获取任务配置
+            config = job.get('config', {})
+            molecule_name = config.get('molecule_name', f'QC_{job_id}')
+            task_type = job.get('task_type', '')  # Cluster Analysis 任务类型
+            smiles = config.get('smiles', '')
+            basis_set = config.get('basis_set', '6-31++g(d,p)')
+            functional = config.get('functional', 'B3LYP')
+            charge = config.get('charge', 0)
+            spin_multiplicity = config.get('spin_multiplicity', 1)
+            solvent_model = config.get('solvent_model', 'gas')
+            solvent_name = config.get('solvent_name', '')
+            # 强制使用 hpc128c 分区（临时修复，直到前端部署新版本）
+            slurm_partition = config.get('slurm_partition', 'hpc128c')
+            if slurm_partition == 'cpu':
+                slurm_partition = 'hpc128c'
+                self.logger.info(f"QC 任务 {job_id} 的分区从 cpu 强制改为 hpc128c")
+            slurm_cpus = config.get('slurm_cpus', 16)
+            slurm_time = config.get('slurm_time', 7200)
+
+            # 获取 xyz_content（来自 desolvation 任务创建的 QC 任务）
+            xyz_content = config.get('xyz_content', '')
+
+            # 检测是否是 desolvation 任务创建的 QC 任务
+            desolvation_job_type = config.get('desolvation_job_type', '')
+            is_desolvation_qc = bool(desolvation_job_type)
+
+            # 获取溶剂配置（支持自定义溶剂参数）
+            solvent_config = config.get('solvent_config', {})
+            if solvent_config:
+                solvent_model = solvent_config.get('model', solvent_model)
+                solvent_name = solvent_config.get('solvent_name', solvent_name)
+
+            # 3. 创建工作目录
+            # 目录名称格式：QC-{job_id}-{molecule_name}
+            # molecule_name 已经包含 MD job ID，例如：MD1263_ligand_EC
+            # 最终目录：QC-1447-MD1263_ligand_EC
+            dir_name = f"QC-{job_id}-{molecule_name}"
+
+            if is_desolvation_qc and not task_type:
+                cluster_work_base = Path(self.config['local'].get('cluster_work_base_path',
+                                         self.config['local']['qc_work_base_path']))
+                work_dir = cluster_work_base / dir_name
+            else:
+                qc_work_base = Path(self.config['local']['qc_work_base_path'])
+                work_dir = qc_work_base / dir_name
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+            # 4. 生成安全的文件名
+            # 使用 task_type 作为文件名（已经是英文）
+            # 例如：ligand_EC.gjf, dimer_PF6.gjf, cluster.gjf
+            if task_type:
+                safe_name = self._sanitize_filename(task_type)
+            else:
+                safe_name = self._sanitize_filename(molecule_name)
+
+            # 5. 生成 Gaussian 输入文件
+            gjf_path = work_dir / f"{safe_name}.gjf"
+            self._generate_gaussian_input(
+                gjf_path, molecule_name, smiles,
+                charge, spin_multiplicity,
+                functional, basis_set,
+                solvent_model, solvent_name,
+                solvent_config,
+                xyz_content=xyz_content,  # 传递 xyz 坐标
+                nprocs=slurm_cpus  # 使用配置的 CPU 核心数
+            )
+            self.logger.info(f"生成 Gaussian 输入文件: {gjf_path}")
+
+            # 6. 生成 Slurm 作业脚本
+            job_script = work_dir / "job.sh"
+            self._generate_qc_job_script(
+                job_script, safe_name, slurm_partition, slurm_cpus, slurm_time, work_dir=work_dir
+            )
+            self.logger.info(f"生成 Slurm 作业脚本: {job_script}")
+
+            # 7. 提交到 Slurm
+            slurm_result = self._submit_to_slurm(work_dir)
+
+            if not slurm_result['success']:
+                raise Exception(slurm_result.get('error', 'Failed to submit to Slurm'))
+
+            slurm_job_id = slurm_result['slurm_job_id']
+
+            # 8. 更新任务状态为 RUNNING
+            self._update_job_status(
+                job_id, 'RUNNING', 'qc',
+                slurm_job_id=slurm_job_id,
+                work_dir=str(work_dir)
+            )
+
+            # 9. 添加到运行中的任务列表
+            self.running_jobs[job_id] = {
+                'type': 'qc',
+                'slurm_job_id': slurm_job_id,
+                'work_dir': work_dir,
+                'start_time': time.time()
+            }
+
+            self.logger.info(f"QC 任务 {job_id} 已提交到 Slurm (Job ID: {slurm_job_id})")
+
+        except Exception as e:
+            self.logger.error(f"处理 QC 任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'qc', error_message=str(e))
+
+    def _process_postprocess_job(self, job: Dict):
+        """处理后处理任务（包括去溶剂化能计算）"""
+        job_id = job['id']
+        config = job.get('config', {})
+        job_type = config.get('job_type', 'UNKNOWN')
+
+        self.logger.info(f"开始处理后处理任务 {job_id} (类型: {job_type})")
+
+        try:
+            # 1. 更新任务状态为 QUEUED
+            self._update_job_status(job_id, 'QUEUED', 'postprocess')
+
+            # 2. 根据任务类型分发处理
+            if job_type == 'DESOLVATION_ENERGY':
+                self._process_desolvation_energy_job(job_id, config)
+            else:
+                raise ValueError(f"Unknown postprocess job type: {job_type}")
+
+        except Exception as e:
+            self.logger.error(f"处理后处理任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'postprocess', error_message=str(e))
+
+    def _process_desolvation_energy_job(self, job_id: int, config: Dict):
+        """处理去溶剂化能计算任务（通过 API 调用后端处理）"""
+        self.logger.info(f"开始去溶剂化能计算任务 {job_id}")
+
+        try:
+            # 调用后端 API 处理任务
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/process_desolvation"
+
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                timeout=300  # 5分钟超时
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                # API 返回 {"status": "ok", ...} 表示成功
+                if result.get('status') == 'ok':
+                    self.logger.info(f"去溶剂化能任务 {job_id} 处理成功: {result}")
+                    # 注意：任务状态由后端 API 更新，worker 不需要再次更新
+                    # self._update_job_status(job_id, 'COMPLETED', 'postprocess')
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    self.logger.error(f"去溶剂化能任务 {job_id} 处理失败: {error_msg}")
+                    self._update_job_status(job_id, 'FAILED', 'postprocess', error_message=error_msg)
+            else:
+                error_msg = f"API returned status {response.status_code}: {response.text}"
+                self.logger.error(f"去溶剂化能任务 {job_id} API调用失败: {error_msg}")
+                self._update_job_status(job_id, 'FAILED', 'postprocess', error_message=error_msg)
+
+        except Exception as e:
+            self.logger.error(f"去溶剂化能任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'postprocess', error_message=str(e))
+            raise
+
+    def _process_binding_job(self, job: Dict):
+        """
+        处理 Binding 分析任务
+
+        简化版 Li-配体 binding energy 计算：
+        E_bind_shell = E_cluster - (E_center_ion + Σ n_j × E_ligand_j)
+        """
+        job_id = job['id']
+        config = job.get('config', {})
+        md_job_id = config.get('md_job_id')
+
+        self.logger.info(f"开始处理 Binding 分析任务 {job_id} (MD job: {md_job_id})")
+
+        try:
+            # 1. 更新状态为 RUNNING
+            self._update_job_status(job_id, 'RUNNING', 'binding', progress=0)
+
+            # 2. 获取可用的 cluster 信息
+            endpoint = f"{self.api_base_url}/binding/available-clusters/{md_job_id}"
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                timeout=60
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"获取 cluster 信息失败: {response.status_code}")
+
+            clusters_info = response.json()
+            composition_keys = config.get('composition_keys', [])
+
+            if not composition_keys:
+                composition_keys = clusters_info.get('composition_keys', [])
+
+            if not composition_keys:
+                raise Exception("没有找到可分析的 cluster")
+
+            self.logger.info(f"Binding 任务 {job_id}: 分析 {len(composition_keys)} 个 cluster 类型")
+
+            # 3. 获取已有的 QC 结果
+            existing_qc = clusters_info.get('existing_qc_by_type', {})
+
+            # 4. 调用后端 API 执行 binding 计算
+            # 这里简化处理：直接调用后端 API 处理
+            process_endpoint = f"{self.api_base_url}/binding/jobs/{job_id}/process"
+
+            # 尝试调用后端处理（如果后端有这个接口）
+            try:
+                process_response = requests.post(
+                    process_endpoint,
+                    headers=self.api_headers,
+                    json={'composition_keys': composition_keys},
+                    timeout=300
+                )
+
+                if process_response.status_code == 200:
+                    result = process_response.json()
+                    self.logger.info(f"Binding 任务 {job_id} 后端处理成功")
+                    return
+                elif process_response.status_code == 404:
+                    # 后端没有实现 process 接口，使用本地处理
+                    self.logger.info(f"Binding 任务 {job_id}: 使用本地处理逻辑")
+                else:
+                    self.logger.warning(f"Binding 后端处理返回 {process_response.status_code}")
+            except Exception as e:
+                self.logger.warning(f"Binding 后端处理调用失败，使用本地逻辑: {e}")
+
+            # 5. 本地处理：从现有 QC 结果计算 binding energy
+            self._calculate_binding_from_existing_qc(job_id, md_job_id, composition_keys, config)
+
+        except Exception as e:
+            self.logger.error(f"处理 Binding 任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'binding', error_message=str(e))
+
+    def _calculate_binding_from_existing_qc(self, job_id: int, md_job_id: int,
+                                            composition_keys: List[str], config: Dict):
+        """从现有 QC 结果计算 binding energy"""
+        self.logger.info(f"Binding 任务 {job_id}: 从现有 QC 结果计算")
+
+        try:
+            # 获取该 MD 任务下的 QC 结果
+            endpoint = f"{self.api_base_url}/qc/jobs"
+            params = {
+                'md_job_id': md_job_id,
+                'status': 'COMPLETED',
+                'limit': 1000
+            }
+
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                params=params,
+                timeout=60
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"获取 QC 结果失败: {response.status_code}")
+
+            qc_data = response.json()
+            qc_jobs = qc_data.get('items', [])
+
+            if not qc_jobs:
+                raise Exception("没有找到已完成的 QC 计算结果")
+
+            # 按分子类型分组
+            energy_by_type = {}  # {molecule_name: energy_au}
+            cluster_energies = {}  # {composition_key: energy_au}
+
+            for qc in qc_jobs:
+                mol_name = qc.get('molecule_name', '')
+                mol_type = qc.get('molecule_type', 'unknown')
+
+                # 获取能量（需要从 results 中获取）
+                # 这里简化处理，假设 config 中有 energy_au
+                qc_config = qc.get('config', {}) or {}
+                energy_au = qc_config.get('energy_au')
+
+                if energy_au is None:
+                    # 需要获取详细结果
+                    detail_endpoint = f"{self.api_base_url}/qc/jobs/{qc['id']}"
+                    detail_resp = requests.get(
+                        detail_endpoint,
+                        headers=self.api_headers,
+                        timeout=30
+                    )
+                    if detail_resp.status_code == 200:
+                        detail = detail_resp.json()
+                        results = detail.get('results', [])
+                        if results:
+                            energy_au = results[0].get('energy_au')
+
+                if energy_au is not None:
+                    energy_by_type[mol_name] = energy_au
+
+                    # 检查是否是 cluster
+                    if 'cluster' in mol_name.lower() or mol_type == 'cluster':
+                        # 提取 composition_key
+                        for key in composition_keys:
+                            if key in mol_name:
+                                cluster_energies[key] = energy_au
+                                break
+
+            # 计算 binding energy（简化版）
+            per_cluster_results = []
+            qc_job_ids = []
+
+            # 获取 Li+ 能量
+            li_energy = None
+            for name, energy in energy_by_type.items():
+                if 'li' in name.lower() and 'cluster' not in name.lower():
+                    li_energy = energy
+                    break
+
+            total_bindings = []
+
+            for comp_key, cluster_energy in cluster_energies.items():
+                if li_energy is None:
+                    continue
+
+                # 简化计算：只有 cluster 和 Li+
+                # 实际应该解析 ligand 类型和数量
+                binding_au = cluster_energy - li_energy
+                binding_kcal = binding_au * 627.509  # Hartree to kcal/mol
+
+                per_cluster_results.append({
+                    'composition_key': comp_key,
+                    'cluster_energy_au': cluster_energy,
+                    'center_ion_energy_au': li_energy,
+                    'binding_energy_au': binding_au,
+                    'binding_energy_kcal': binding_kcal,
+                    'converged': True,
+                    'warnings': ['简化计算：未减去配体能量']
+                })
+                total_bindings.append(binding_kcal)
+
+            # 生成汇总
+            import statistics
+            summary = {
+                'total_clusters': len(composition_keys),
+                'completed_clusters': len(per_cluster_results),
+                'failed_clusters': len(composition_keys) - len(per_cluster_results),
+                'warnings': []
+            }
+
+            if total_bindings:
+                summary['mean_total_binding_kcal'] = statistics.mean(total_bindings)
+                if len(total_bindings) > 1:
+                    summary['std_total_binding_kcal'] = statistics.stdev(total_bindings)
+
+            result = {
+                'per_cluster_results': per_cluster_results,
+                'summary': summary
+            }
+
+            # 更新任务状态为完成
+            self._update_binding_result(job_id, result, qc_job_ids)
+
+        except Exception as e:
+            self.logger.error(f"计算 binding energy 失败: {e}", exc_info=True)
+            raise
+
+    def _update_binding_result(self, job_id: int, result: Dict, qc_job_ids: List[int]):
+        """更新 Binding 任务结果"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/status"
+
+            data = {
+                'status': 'COMPLETED',
+                'job_type': 'BINDING',
+                'worker_name': self.worker_name,
+                'progress': 100.0,
+                'result': result,
+                'qc_job_ids': qc_job_ids
+            }
+
+            response = requests.put(
+                endpoint,
+                headers=self.api_headers,
+                json=data,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                self.logger.info(f"Binding 任务 {job_id} 完成，已更新结果")
+            else:
+                self.logger.error(f"更新 Binding 任务 {job_id} 状态失败: {response.status_code}")
+
+        except Exception as e:
+            self.logger.error(f"更新 Binding 任务结果失败: {e}")
+
+    # =========================================================================
+    # Redox 热力学循环计算
+    # =========================================================================
+
+    def _get_qc_job_structure(self, qc_job_id: int) -> Optional[Dict]:
+        """
+        从 API 获取 QC 任务的结构信息
+
+        返回:
+            {
+                'xyz_content': str,  # XYZ 格式的结构
+                'smiles': str,
+                'charge': int,
+                'multiplicity': int,
+                'molecule_name': str
+            }
+        """
+        try:
+            endpoint = f"{self.api_base_url}/qc/jobs/{qc_job_id}"
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                job_data = response.json()
+
+                # 尝试从 COS 获取优化后的结构
+                xyz_content = None
+                result = job_data.get('result', {})
+                if result and result.get('optimized_xyz_url'):
+                    try:
+                        xyz_response = requests.get(result['optimized_xyz_url'], timeout=30)
+                        if xyz_response.status_code == 200:
+                            xyz_content = xyz_response.text
+                    except Exception as e:
+                        self.logger.warning(f"获取优化结构失败: {e}")
+
+                # 如果没有优化结构，尝试获取输入结构
+                if not xyz_content:
+                    input_data = job_data.get('input_data', {})
+                    xyz_content = input_data.get('xyz_content', '')
+
+                return {
+                    'xyz_content': xyz_content,
+                    'smiles': job_data.get('smiles', ''),
+                    'charge': job_data.get('charge', 0),
+                    'multiplicity': job_data.get('spin_multiplicity', 1),
+                    'molecule_name': job_data.get('molecule_name', 'unknown')
+                }
+            else:
+                self.logger.error(f"获取 QC 任务 {qc_job_id} 失败: {response.status_code}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"获取 QC 任务结构失败: {e}")
+            return None
+
+    def _process_redox_job(self, job: Dict):
+        """
+        处理 Redox 热力学循环任务
+
+        ⚠️ 高风险警告：
+        - 结果对方法/基组/溶剂模型高度敏感
+        - 计算量大，经常不收敛
+        - 仅供研究参考
+
+        热力学循环：
+        ΔG°(sol) = ΔG°(gas) + ΔG_solv(Red) - ΔG_solv(Ox)
+        E° = -ΔG°(sol) / nF
+        """
+        job_id = job['id']
+        config = job.get('config', {})
+
+        self.logger.info(f"开始处理 Redox 热力学循环任务 {job_id}")
+        self.logger.warning(f"⚠️ Redox 任务 {job_id}: 高风险功能，结果可能不准确")
+
+        try:
+            # 1. 更新状态为 RUNNING
+            self._update_job_status(job_id, 'RUNNING', 'redox', progress=0)
+
+            species_list = config.get('species_list', [])
+            mode = config.get('mode', 'cheap')
+            functional = config.get('functional', 'B3LYP')
+            basis_set = config.get('basis_set', '6-31G*')
+            solvent_model = config.get('solvent_model', 'SMD')
+            solvent = config.get('solvent', 'water')
+            use_dispersion = config.get('use_dispersion', True)
+            li_ref_potential = config.get('li_reference_potential', -3.04)
+
+            if not species_list:
+                raise Exception("物种列表为空")
+
+            if len(species_list) > 20:
+                raise Exception(f"物种数量 ({len(species_list)}) 超过限制 (20)")
+
+            self.logger.info(f"Redox 任务 {job_id}: {len(species_list)} 个物种, 模式={mode}")
+
+            # 2. 为每个物种创建 QC 任务
+            species_results = []
+            all_qc_job_ids = []
+            global_warnings = []
+
+            for i, species in enumerate(species_list):
+                progress = (i / len(species_list)) * 80
+                self._update_job_status(job_id, 'RUNNING', 'redox', progress=progress)
+
+                try:
+                    species_result = self._calculate_species_redox(
+                        job_id, species, mode, functional, basis_set,
+                        solvent_model, solvent, use_dispersion, li_ref_potential
+                    )
+                    species_results.append(species_result)
+                    all_qc_job_ids.extend(species_result.get('qc_job_ids', []))
+                except Exception as e:
+                    self.logger.error(f"Redox 物种 {species.get('name')} 计算失败: {e}")
+                    species_results.append({
+                        'name': species.get('name', 'unknown'),
+                        'redox_type': species.get('redox_type', 'oxidation'),
+                        'converged': False,
+                        'warnings': [str(e)],
+                        'qc_job_ids': []
+                    })
+                    global_warnings.append(f"{species.get('name')}: {str(e)}")
+
+            # 3. 计算电化学窗口
+            ox_potentials = [s['e_vs_li_v'] for s in species_results
+                           if s.get('converged') and s.get('redox_type') == 'oxidation' and s.get('e_vs_li_v')]
+            red_potentials = [s['e_vs_li_v'] for s in species_results
+                            if s.get('converged') and s.get('redox_type') == 'reduction' and s.get('e_vs_li_v')]
+
+            result = {
+                'species_results': species_results,
+                'oxidation_potentials_v': ox_potentials,
+                'reduction_potentials_v': red_potentials,
+                'global_warnings': global_warnings,
+                'calculation_mode': mode,
+                'reference_note': f'所有电位相对于 Li+/Li ({li_ref_potential} V vs SHE)'
+            }
+
+            # 计算窗口（如果有足够数据）
+            if ox_potentials:
+                import statistics
+                result['oxidation_limit_v'] = sorted(ox_potentials)[max(0, len(ox_potentials)//20)]  # 5% 分位数
+            if red_potentials:
+                result['reduction_limit_v'] = sorted(red_potentials, reverse=True)[max(0, len(red_potentials)//20)]  # 95% 分位数
+            if result.get('oxidation_limit_v') and result.get('reduction_limit_v'):
+                result['electrochemical_window_v'] = result['oxidation_limit_v'] - result['reduction_limit_v']
+
+            # 4. 更新结果
+            self._update_redox_result(job_id, result, all_qc_job_ids)
+
+        except Exception as e:
+            self.logger.error(f"处理 Redox 任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'redox', error_message=str(e))
+
+    def _calculate_species_redox(self, job_id: int, species: Dict, mode: str,
+                                  functional: str, basis_set: str,
+                                  solvent_model: str, solvent: str,
+                                  use_dispersion: bool, li_ref_potential: float) -> Dict:
+        """计算单个物种的氧化还原电位"""
+        name = species.get('name', 'unknown')
+        qc_job_id = species.get('qc_job_id')  # 优先使用已有 QC 任务
+        smiles = species.get('smiles', '')
+        xyz_content = species.get('xyz_content', '')
+        charge = species.get('charge', 0)
+        multiplicity = species.get('multiplicity', 1)
+        redox_type = species.get('redox_type', 'oxidation')
+
+        # 如果提供了 qc_job_id，从已有 QC 任务获取结构
+        if qc_job_id:
+            self.logger.info(f"从 QC 任务 {qc_job_id} 获取物种 {name} 的结构")
+            qc_structure = self._get_qc_job_structure(qc_job_id)
+            if qc_structure:
+                xyz_content = qc_structure.get('xyz_content', xyz_content)
+                smiles = qc_structure.get('smiles', smiles)
+                charge = qc_structure.get('charge', charge)
+                multiplicity = qc_structure.get('multiplicity', multiplicity)
+                self.logger.info(f"成功获取结构: charge={charge}, mult={multiplicity}")
+            else:
+                self.logger.warning(f"无法从 QC 任务 {qc_job_id} 获取结构，使用默认值")
+
+        self.logger.info(f"计算物种 {name} 的 {redox_type} 电位")
+
+        # 根据模式决定计算步骤
+        # cheap: 垂直近似，只做单点
+        # standard: gas 优化 + freq，溶剂单点
+        # heavy: gas 和溶剂都优化 + freq
+
+        qc_job_ids = []
+        warnings = []
+
+        # 物理常数
+        HARTREE_TO_KCAL = 627.509
+        FARADAY_KCAL = 23.061  # kcal/(mol·V)
+
+        # 确定氧化态/还原态的电荷
+        if redox_type == 'oxidation':
+            charged_charge = charge + 1
+            # 氧化：失去电子，自由基可能增加
+            charged_multiplicity = multiplicity + 1 if multiplicity == 1 else multiplicity - 1
+        else:  # reduction
+            charged_charge = charge - 1
+            charged_multiplicity = multiplicity + 1 if multiplicity == 1 else multiplicity - 1
+
+        try:
+            if mode == 'cheap':
+                # 垂直近似：直接在初始构型上做单点
+                # gas 单点
+                e_neutral_gas = self._run_redox_qc_calculation(
+                    name, smiles, xyz_content, charge, multiplicity,
+                    functional, basis_set, 'SP', None, use_dispersion, job_id
+                )
+                qc_job_ids.append(e_neutral_gas.get('qc_job_id'))
+
+                e_charged_gas = self._run_redox_qc_calculation(
+                    name + '_charged', smiles, xyz_content, charged_charge, charged_multiplicity,
+                    functional, basis_set, 'SP', None, use_dispersion, job_id
+                )
+                qc_job_ids.append(e_charged_gas.get('qc_job_id'))
+
+                # 溶剂单点
+                e_neutral_sol = self._run_redox_qc_calculation(
+                    name + '_sol', smiles, xyz_content, charge, multiplicity,
+                    functional, basis_set, 'SP', solvent_model, use_dispersion, job_id,
+                    solvent=solvent
+                )
+                qc_job_ids.append(e_neutral_sol.get('qc_job_id'))
+
+                e_charged_sol = self._run_redox_qc_calculation(
+                    name + '_charged_sol', smiles, xyz_content, charged_charge, charged_multiplicity,
+                    functional, basis_set, 'SP', solvent_model, use_dispersion, job_id,
+                    solvent=solvent
+                )
+                qc_job_ids.append(e_charged_sol.get('qc_job_id'))
+
+                warnings.append('使用垂直近似（cheap模式），结果仅供参考')
+
+            else:
+                # standard/heavy: 需要优化
+                # 这里简化处理，实际应该等待 QC 任务完成
+                warnings.append(f'{mode}模式需要几何优化，当前使用简化流程')
+
+                # 先做 gas 优化
+                opt_result = self._run_redox_qc_calculation(
+                    name + '_opt', smiles, xyz_content, charge, multiplicity,
+                    functional, basis_set, 'OPT', None, use_dispersion, job_id
+                )
+                qc_job_ids.append(opt_result.get('qc_job_id'))
+                e_neutral_gas = opt_result
+
+                # 其他计算类似 cheap 模式
+                e_charged_gas = self._run_redox_qc_calculation(
+                    name + '_charged', smiles, xyz_content, charged_charge, charged_multiplicity,
+                    functional, basis_set, 'SP', None, use_dispersion, job_id
+                )
+                qc_job_ids.append(e_charged_gas.get('qc_job_id'))
+
+                e_neutral_sol = self._run_redox_qc_calculation(
+                    name + '_sol', smiles, xyz_content, charge, multiplicity,
+                    functional, basis_set, 'SP', solvent_model, use_dispersion, job_id,
+                    solvent=solvent
+                )
+                qc_job_ids.append(e_neutral_sol.get('qc_job_id'))
+
+                e_charged_sol = self._run_redox_qc_calculation(
+                    name + '_charged_sol', smiles, xyz_content, charged_charge, charged_multiplicity,
+                    functional, basis_set, 'SP', solvent_model, use_dispersion, job_id,
+                    solvent=solvent
+                )
+                qc_job_ids.append(e_charged_sol.get('qc_job_id'))
+
+            # 计算自由能变化
+            # 注意：这里是简化计算，实际应该等待 QC 完成并获取结果
+            # 暂时使用占位值
+            dg_gas_kcal = None
+            dg_solv_neutral_kcal = None
+            dg_solv_charged_kcal = None
+            dg_sol_kcal = None
+            e_abs_v = None
+            e_vs_li_v = None
+
+            # 如果能获取到能量值，计算电位
+            if all([e_neutral_gas.get('energy'), e_charged_gas.get('energy'),
+                    e_neutral_sol.get('energy'), e_charged_sol.get('energy')]):
+
+                E_n_g = e_neutral_gas['energy']
+                E_c_g = e_charged_gas['energy']
+                E_n_s = e_neutral_sol['energy']
+                E_c_s = e_charged_sol['energy']
+
+                # ΔG(gas) = E(charged) - E(neutral) (in Hartree)
+                dg_gas_au = E_c_g - E_n_g
+                dg_gas_kcal = dg_gas_au * HARTREE_TO_KCAL
+
+                # ΔG_solv = E(sol) - E(gas)
+                dg_solv_neutral_kcal = (E_n_s - E_n_g) * HARTREE_TO_KCAL
+                dg_solv_charged_kcal = (E_c_s - E_c_g) * HARTREE_TO_KCAL
+
+                # ΔG(sol) = ΔG(gas) + ΔG_solv(charged) - ΔG_solv(neutral)
+                dg_sol_kcal = dg_gas_kcal + dg_solv_charged_kcal - dg_solv_neutral_kcal
+
+                # E° = -ΔG / nF
+                e_abs_v = -dg_sol_kcal / FARADAY_KCAL
+
+                # vs Li+/Li
+                e_vs_li_v = e_abs_v - li_ref_potential
+
+            return {
+                'name': name,
+                'redox_type': redox_type,
+                'e_neutral_gas': e_neutral_gas.get('energy'),
+                'e_charged_gas': e_charged_gas.get('energy'),
+                'e_neutral_sol': e_neutral_sol.get('energy'),
+                'e_charged_sol': e_charged_sol.get('energy'),
+                'dg_gas_kcal': dg_gas_kcal,
+                'dg_solv_neutral_kcal': dg_solv_neutral_kcal,
+                'dg_solv_charged_kcal': dg_solv_charged_kcal,
+                'dg_sol_kcal': dg_sol_kcal,
+                'e_abs_v': e_abs_v,
+                'e_vs_li_v': e_vs_li_v,
+                'converged': e_vs_li_v is not None,
+                'warnings': warnings,
+                'qc_job_ids': [jid for jid in qc_job_ids if jid]
+            }
+
+        except Exception as e:
+            self.logger.error(f"物种 {name} 计算失败: {e}")
+            return {
+                'name': name,
+                'redox_type': redox_type,
+                'converged': False,
+                'warnings': [str(e)],
+                'qc_job_ids': [jid for jid in qc_job_ids if jid]
+            }
+
+    def _run_redox_qc_calculation(self, name: str, smiles: str, xyz_content: str,
+                                   charge: int, multiplicity: int,
+                                   functional: str, basis_set: str,
+                                   calc_type: str, solvent_model: Optional[str],
+                                   use_dispersion: bool, parent_job_id: int,
+                                   solvent: str = None,
+                                   max_wait_seconds: int = 3600) -> Dict:
+        """
+        运行单个 QC 计算（用于 Redox）
+
+        返回：{'qc_job_id': int, 'energy': float or None}
+        """
+        self.logger.info(f"创建 Redox QC 任务: {name}, {calc_type}, solvent={solvent_model}")
+
+        try:
+            # 提取基础分子名称（去掉 _charged, _sol, _opt 等后缀）
+            # 这样可以实现全局复用：Li-PF6_sol 和 Li-PF6 都用 Li-PF6 作为基础名称
+            import re
+            base_molecule_name = re.sub(r'(_charged|_sol|_opt|_sp_ox_at_neutral|_sp_neutral_at_ox|_neutral_opt|_oxidized_opt)+$', '', name)
+
+            # 1. 构建 QC 任务创建请求
+            config = {
+                'job_type': calc_type,  # SP, OPT, or FREQ
+                'use_dispersion': use_dispersion,
+                'source': 'redox_thermodynamic_cycle',
+                'parent_redox_job_id': parent_job_id,
+                'original_task_name': name  # 保留原始名称用于日志
+            }
+
+            qc_job_data = {
+                'smiles': smiles,
+                'molecule_name': base_molecule_name,  # 使用基础名称，便于复用
+                'molecule_type': 'redox_species',
+                'charge': charge,
+                'spin_multiplicity': multiplicity,
+                'functional': functional,
+                'basis_set': basis_set,
+                'config': config
+            }
+
+            # 溶剂配置：作为顶层字段传递，用于后端查重复用
+            if solvent_model and solvent_model != 'gas':
+                qc_job_data['solvent_config'] = {
+                    'model': solvent_model,
+                    'solvent_name': solvent or 'water'
+                }
+
+            # 如果有 XYZ 坐标，添加到配置中
+            if xyz_content:
+                qc_job_data['config']['initial_xyz'] = xyz_content
+
+            # 2. 调用 API 创建 QC 任务
+            create_endpoint = f"{self.api_base_url}/qc/jobs"
+            response = requests.post(
+                create_endpoint,
+                headers=self.api_headers,
+                json=qc_job_data,
+                timeout=60
+            )
+
+            if response.status_code not in [200, 201]:
+                self.logger.error(f"创建 QC 任务失败: {response.status_code} - {response.text}")
+                return {'qc_job_id': None, 'energy': None}
+
+            qc_job = response.json()
+            qc_job_id = qc_job['id']
+            self.logger.info(f"创建 QC 任务成功: ID={qc_job_id}")
+
+            # 3. 提交任务
+            submit_endpoint = f"{self.api_base_url}/qc/jobs/{qc_job_id}/submit"
+            submit_response = requests.post(
+                submit_endpoint,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if submit_response.status_code != 200:
+                self.logger.error(f"提交 QC 任务失败: {submit_response.status_code}")
+                return {'qc_job_id': qc_job_id, 'energy': None}
+
+            # 4. 等待任务完成（轮询）
+            # 注意：这里简化处理，实际的 QC 任务会被其他 Worker 处理
+            # 我们只需要等待并检查状态
+            start_time = time.time()
+            poll_interval = 30  # 30秒轮询一次
+
+            while time.time() - start_time < max_wait_seconds:
+                status_endpoint = f"{self.api_base_url}/qc/jobs/{qc_job_id}"
+                status_response = requests.get(
+                    status_endpoint,
+                    headers=self.api_headers,
+                    timeout=30
+                )
+
+                if status_response.status_code != 200:
+                    self.logger.warning(f"获取 QC 任务 {qc_job_id} 状态失败")
+                    time.sleep(poll_interval)
+                    continue
+
+                job_status = status_response.json()
+                current_status = job_status.get('status')
+
+                if current_status == 'COMPLETED':
+                    # 获取能量结果
+                    results = job_status.get('results', [])
+                    energy = None
+                    if results:
+                        energy = results[0].get('energy_au')
+
+                    self.logger.info(f"QC 任务 {qc_job_id} 完成, 能量={energy}")
+                    return {'qc_job_id': qc_job_id, 'energy': energy}
+
+                elif current_status == 'FAILED':
+                    error_msg = job_status.get('error_message', 'Unknown error')
+                    self.logger.error(f"QC 任务 {qc_job_id} 失败: {error_msg}")
+                    return {'qc_job_id': qc_job_id, 'energy': None}
+
+                elif current_status == 'CANCELLED':
+                    self.logger.warning(f"QC 任务 {qc_job_id} 被取消")
+                    return {'qc_job_id': qc_job_id, 'energy': None}
+
+                self.logger.debug(f"QC 任务 {qc_job_id} 状态: {current_status}, 等待中...")
+                time.sleep(poll_interval)
+
+            # 超时
+            self.logger.error(f"QC 任务 {qc_job_id} 等待超时 ({max_wait_seconds}秒)")
+            return {'qc_job_id': qc_job_id, 'energy': None}
+
+        except Exception as e:
+            self.logger.error(f"运行 Redox QC 计算失败: {e}", exc_info=True)
+            return {'qc_job_id': None, 'energy': None}
+
+    def _update_redox_result(self, job_id: int, result: Dict, qc_job_ids: List[int]):
+        """更新 Redox 任务结果"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/status"
+
+            data = {
+                'status': 'COMPLETED',
+                'job_type': 'REDOX',
+                'worker_name': self.worker_name,
+                'progress': 100.0,
+                'result': result,
+                'qc_job_ids': qc_job_ids
+            }
+
+            response = requests.put(
+                endpoint,
+                headers=self.api_headers,
+                json=data,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                self.logger.info(f"Redox 任务 {job_id} 完成，已更新结果")
+            else:
+                self.logger.error(f"更新 Redox 任务 {job_id} 状态失败: {response.status_code}")
+
+        except Exception as e:
+            self.logger.error(f"更新 Redox 任务结果失败: {e}")
+
+    # =========================================================================
+    # 重组能计算 (Marcus 理论)
+    # =========================================================================
+
+    def _process_reorg_energy_job(self, job: Dict):
+        """
+        处理重组能计算任务 (Marcus 理论)
+
+        ⚠️ 极高风险警告：
+        - 每个物种需要 4 次几何优化 + 4 次单点
+        - 计算量极大，经常不收敛
+        - 结果对初始构型极其敏感
+
+        4点方案：
+        λ_ox = E(q+1, R_q) - E(q+1, R_{q+1})
+        λ_red = E(q, R_{q+1}) - E(q, R_q)
+        λ_total = (λ_ox + λ_red) / 2
+        """
+        job_id = job['id']
+        config = job.get('config', {})
+
+        self.logger.info(f"开始处理重组能计算任务 {job_id}")
+        self.logger.warning(f"⚠️⚠️ 重组能任务 {job_id}: 极高风险功能，计算量大，容易失败")
+
+        try:
+            # 1. 更新状态为 RUNNING
+            self._update_job_status(job_id, 'RUNNING', 'reorg', progress=0)
+
+            species_list = config.get('species_list', [])
+            functional = config.get('functional', 'B3LYP')
+            basis_set = config.get('basis_set', '6-31G*')
+            use_dispersion = config.get('use_dispersion', True)
+
+            if not species_list:
+                raise Exception("物种列表为空")
+
+            if len(species_list) > 5:
+                raise Exception(f"物种数量 ({len(species_list)}) 超过限制 (5)")
+
+            self.logger.info(f"重组能任务 {job_id}: {len(species_list)} 个物种")
+
+            # 2. 为每个物种计算重组能
+            species_results = []
+            all_qc_job_ids = []
+            global_warnings = []
+
+            # 物理常数
+            HARTREE_TO_EV = 27.2114
+
+            for i, species in enumerate(species_list):
+                progress = (i / len(species_list)) * 80
+                self._update_job_status(job_id, 'RUNNING', 'reorg', progress=progress)
+
+                try:
+                    species_result = self._calculate_species_reorg(
+                        job_id, species, functional, basis_set, use_dispersion
+                    )
+                    species_results.append(species_result)
+                    all_qc_job_ids.extend(species_result.get('qc_job_ids', []))
+                except Exception as e:
+                    self.logger.error(f"重组能物种 {species.get('name')} 计算失败: {e}")
+                    species_results.append({
+                        'name': species.get('name', 'unknown'),
+                        'converged': False,
+                        'warnings': [str(e)],
+                        'qc_job_ids': []
+                    })
+                    global_warnings.append(f"{species.get('name')}: {str(e)}")
+
+            # 3. 计算平均值
+            lambda_ox_values = [s['lambda_ox_ev'] for s in species_results if s.get('converged') and s.get('lambda_ox_ev')]
+            lambda_red_values = [s['lambda_red_ev'] for s in species_results if s.get('converged') and s.get('lambda_red_ev')]
+            lambda_total_values = [s['lambda_total_ev'] for s in species_results if s.get('converged') and s.get('lambda_total_ev')]
+
+            import statistics
+            result = {
+                'species_results': species_results,
+                'global_warnings': global_warnings,
+                'reference_note': '重组能基于 Marcus 理论 4 点方案计算，结果敏感度高'
+            }
+
+            if lambda_ox_values:
+                result['lambda_ox_mean_ev'] = statistics.mean(lambda_ox_values)
+            if lambda_red_values:
+                result['lambda_red_mean_ev'] = statistics.mean(lambda_red_values)
+            if lambda_total_values:
+                result['lambda_total_mean_ev'] = statistics.mean(lambda_total_values)
+
+            # 4. 更新结果
+            self._update_reorg_result(job_id, result, all_qc_job_ids)
+
+        except Exception as e:
+            self.logger.error(f"处理重组能任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'reorg', error_message=str(e))
+
+    def _calculate_species_reorg(self, job_id: int, species: Dict,
+                                  functional: str, basis_set: str,
+                                  use_dispersion: bool) -> Dict:
+        """
+        计算单个物种的重组能 (Marcus 理论 4 点方案)
+
+        4点方案：
+        1. 优化中性态几何 R_q → 得到 E(q, R_q)
+        2. 优化氧化态几何 R_{q+1} → 得到 E(q+1, R_{q+1})
+        3. 单点 E(q+1, R_q) - 在中性态几何上计算氧化态能量
+        4. 单点 E(q, R_{q+1}) - 在氧化态几何上计算中性态能量
+
+        λ_ox = E(q+1, R_q) - E(q+1, R_{q+1})
+        λ_red = E(q, R_{q+1}) - E(q, R_q)
+        λ_total = (λ_ox + λ_red) / 2
+        """
+        name = species.get('name', 'unknown')
+        qc_job_id = species.get('qc_job_id')  # 优先使用已有 QC 任务
+        smiles = species.get('smiles', '')
+        xyz_content = species.get('xyz_content', '')
+        charge_neutral = species.get('charge_neutral', 0)
+        charge_oxidized = species.get('charge_oxidized', 1)
+        mult_neutral = species.get('multiplicity_neutral', 1)
+        mult_oxidized = species.get('multiplicity_oxidized', 2)
+
+        # 如果提供了 qc_job_id，从已有 QC 任务获取结构
+        if qc_job_id:
+            self.logger.info(f"从 QC 任务 {qc_job_id} 获取物种 {name} 的结构")
+            qc_structure = self._get_qc_job_structure(qc_job_id)
+            if qc_structure:
+                xyz_content = qc_structure.get('xyz_content', xyz_content)
+                smiles = qc_structure.get('smiles', smiles)
+                # 注意：重组能使用用户指定的电荷/多重度，不从 QC 任务获取
+                self.logger.info(f"成功获取结构，使用用户指定的电荷: neutral={charge_neutral}, oxidized={charge_oxidized}")
+            else:
+                self.logger.warning(f"无法从 QC 任务 {qc_job_id} 获取结构，使用默认值")
+
+        self.logger.info(f"计算物种 {name} 的重组能 (4点方案)")
+        self.logger.warning(f"⚠️ 重组能计算极其耗时，物种: {name}")
+
+        qc_job_ids = []
+        warnings = []
+
+        HARTREE_TO_EV = 27.2114
+
+        try:
+            # Step 1: 优化中性态几何 R_q
+            self.logger.info(f"{name}: Step 1/4 - 优化中性态几何")
+            opt_neutral = self._run_redox_qc_calculation(
+                name=f"{name}_neutral_opt",
+                smiles=smiles,
+                xyz_content=xyz_content,
+                charge=charge_neutral,
+                multiplicity=mult_neutral,
+                functional=functional,
+                basis_set=basis_set,
+                calc_type='OPT',
+                solvent_model=None,
+                use_dispersion=use_dispersion,
+                parent_job_id=job_id,
+                max_wait_seconds=7200  # 2小时超时
+            )
+            if opt_neutral.get('qc_job_id'):
+                qc_job_ids.append(opt_neutral['qc_job_id'])
+
+            E_q_Rq = opt_neutral.get('energy')  # E(q, R_q)
+
+            if E_q_Rq is None:
+                warnings.append('中性态优化失败')
+                return {
+                    'name': name,
+                    'converged': False,
+                    'warnings': warnings,
+                    'qc_job_ids': qc_job_ids
+                }
+
+            # Step 2: 优化氧化态几何 R_{q+1}
+            self.logger.info(f"{name}: Step 2/4 - 优化氧化态几何")
+            opt_oxidized = self._run_redox_qc_calculation(
+                name=f"{name}_oxidized_opt",
+                smiles=smiles,
+                xyz_content=xyz_content,
+                charge=charge_oxidized,
+                multiplicity=mult_oxidized,
+                functional=functional,
+                basis_set=basis_set,
+                calc_type='OPT',
+                solvent_model=None,
+                use_dispersion=use_dispersion,
+                parent_job_id=job_id,
+                max_wait_seconds=7200
+            )
+            if opt_oxidized.get('qc_job_id'):
+                qc_job_ids.append(opt_oxidized['qc_job_id'])
+
+            E_qp1_Rqp1 = opt_oxidized.get('energy')  # E(q+1, R_{q+1})
+
+            if E_qp1_Rqp1 is None:
+                warnings.append('氧化态优化失败')
+                return {
+                    'name': name,
+                    'E_q_Rq': E_q_Rq,
+                    'converged': False,
+                    'warnings': warnings,
+                    'qc_job_ids': qc_job_ids
+                }
+
+            # Step 3: 单点 E(q+1, R_q) - 在中性态几何上计算氧化态能量
+            # 需要获取中性态优化后的几何
+            self.logger.info(f"{name}: Step 3/4 - 单点 E(q+1, R_q)")
+            sp_oxidized_at_neutral = self._run_redox_qc_calculation(
+                name=f"{name}_sp_ox_at_neutral",
+                smiles=smiles,
+                xyz_content=xyz_content,  # 理想情况下应该用优化后的几何
+                charge=charge_oxidized,
+                multiplicity=mult_oxidized,
+                functional=functional,
+                basis_set=basis_set,
+                calc_type='SP',
+                solvent_model=None,
+                use_dispersion=use_dispersion,
+                parent_job_id=job_id,
+                max_wait_seconds=3600
+            )
+            if sp_oxidized_at_neutral.get('qc_job_id'):
+                qc_job_ids.append(sp_oxidized_at_neutral['qc_job_id'])
+
+            E_qp1_Rq = sp_oxidized_at_neutral.get('energy')  # E(q+1, R_q)
+
+            # Step 4: 单点 E(q, R_{q+1}) - 在氧化态几何上计算中性态能量
+            self.logger.info(f"{name}: Step 4/4 - 单点 E(q, R_{q+1})")
+            sp_neutral_at_oxidized = self._run_redox_qc_calculation(
+                name=f"{name}_sp_neutral_at_ox",
+                smiles=smiles,
+                xyz_content=xyz_content,  # 理想情况下应该用优化后的几何
+                charge=charge_neutral,
+                multiplicity=mult_neutral,
+                functional=functional,
+                basis_set=basis_set,
+                calc_type='SP',
+                solvent_model=None,
+                use_dispersion=use_dispersion,
+                parent_job_id=job_id,
+                max_wait_seconds=3600
+            )
+            if sp_neutral_at_oxidized.get('qc_job_id'):
+                qc_job_ids.append(sp_neutral_at_oxidized['qc_job_id'])
+
+            E_q_Rqp1 = sp_neutral_at_oxidized.get('energy')  # E(q, R_{q+1})
+
+            # 计算重组能
+            lambda_ox_ev = None
+            lambda_red_ev = None
+            lambda_total_ev = None
+
+            if E_qp1_Rq is not None and E_qp1_Rqp1 is not None:
+                lambda_ox_au = E_qp1_Rq - E_qp1_Rqp1
+                lambda_ox_ev = lambda_ox_au * HARTREE_TO_EV
+                self.logger.info(f"{name}: λ_ox = {lambda_ox_ev:.4f} eV")
+
+            if E_q_Rqp1 is not None and E_q_Rq is not None:
+                lambda_red_au = E_q_Rqp1 - E_q_Rq
+                lambda_red_ev = lambda_red_au * HARTREE_TO_EV
+                self.logger.info(f"{name}: λ_red = {lambda_red_ev:.4f} eV")
+
+            if lambda_ox_ev is not None and lambda_red_ev is not None:
+                lambda_total_ev = (lambda_ox_ev + lambda_red_ev) / 2
+                self.logger.info(f"{name}: λ_total = {lambda_total_ev:.4f} eV")
+
+            converged = lambda_total_ev is not None
+
+            if not converged:
+                warnings.append('部分单点计算失败，无法计算完整重组能')
+
+            return {
+                'name': name,
+                'E_q_Rq': E_q_Rq,
+                'E_qp1_Rqp1': E_qp1_Rqp1,
+                'E_qp1_Rq': E_qp1_Rq,
+                'E_q_Rqp1': E_q_Rqp1,
+                'lambda_ox_ev': lambda_ox_ev,
+                'lambda_red_ev': lambda_red_ev,
+                'lambda_total_ev': lambda_total_ev,
+                'converged': converged,
+                'warnings': warnings,
+                'qc_job_ids': qc_job_ids
+            }
+
+        except Exception as e:
+            self.logger.error(f"物种 {name} 重组能计算失败: {e}", exc_info=True)
+            return {
+                'name': name,
+                'converged': False,
+                'warnings': [str(e)],
+                'qc_job_ids': qc_job_ids
+            }
+
+    def _update_reorg_result(self, job_id: int, result: Dict, qc_job_ids: List[int]):
+        """更新重组能任务结果"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/status"
+
+            data = {
+                'status': 'COMPLETED',
+                'job_type': 'REORG',
+                'worker_name': self.worker_name,
+                'progress': 100.0,
+                'result': result,
+                'qc_job_ids': qc_job_ids
+            }
+
+            response = requests.put(
+                endpoint,
+                headers=self.api_headers,
+                json=data,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                self.logger.info(f"重组能任务 {job_id} 完成，已更新结果")
+            else:
+                self.logger.error(f"更新重组能任务 {job_id} 状态失败: {response.status_code}")
+
+        except Exception as e:
+            self.logger.error(f"更新重组能任务结果失败: {e}")
+
+    def _check_waiting_desolvation_jobs(self):
+        """
+        检查等待 QC 任务完成的去溶剂化任务
+
+        去溶剂化能计算分两个阶段：
+        - Phase 1: 创建 QC 任务（cluster, ligands, cluster_minus）
+        - Phase 2: 等待 QC 完成后计算去溶剂化能
+
+        此函数检查处于 POSTPROCESSING 状态且 phase=2 的任务，
+        如果其 QC 任务已完成，则继续执行 Phase 2 计算。
+        """
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
+
+            from app.database import SessionLocal
+            from app.models.job import PostprocessJob, JobStatus
+            from app.tasks.desolvation import run_desolvation_job
+
+            db = SessionLocal()
+            try:
+                # 查找处于 POSTPROCESSING 状态的去溶剂化任务
+                waiting_jobs = db.query(PostprocessJob).filter(
+                    PostprocessJob.job_type == 'DESOLVATION_ENERGY',
+                    PostprocessJob.status == JobStatus.POSTPROCESSING
+                ).all()
+
+                if waiting_jobs:
+                    self.logger.info(f"发现 {len(waiting_jobs)} 个等待中的去溶剂化任务")
+
+                for job in waiting_jobs:
+                    config = job.config or {}
+                    phase = config.get('phase', 1)
+
+                    if phase == 2:
+                        # 获取需要等待的 QC 任务（不包括复用的）
+                        qc_job_ids = config.get('qc_job_ids', [])
+                        reused_qc_job_ids = config.get('reused_qc_job_ids', [])
+
+                        # 需要等待完成的任务 = 所有任务 - 复用的任务
+                        # 复用的任务已经是 COMPLETED 状态
+                        pending_qc_job_ids = [jid for jid in qc_job_ids if jid not in reused_qc_job_ids]
+
+                        if not qc_job_ids and not reused_qc_job_ids:
+                            continue
+
+                        # 检查 QC 任务状态
+                        from app.models.qc import QCJob, QCJobStatus
+                        all_completed = True
+                        any_failed = False
+
+                        for qc_job_id in pending_qc_job_ids:
+                            qc_job = db.query(QCJob).filter(QCJob.id == qc_job_id).first()
+                            if not qc_job:
+                                all_completed = False
+                                break
+                            if qc_job.status == QCJobStatus.FAILED:
+                                any_failed = True
+                                break
+                            if qc_job.status != QCJobStatus.COMPLETED:
+                                all_completed = False
+                                break
+
+                        if any_failed:
+                            self.logger.warning(f"去溶剂化任务 {job.id} 的 QC 任务失败")
+                            job.status = JobStatus.FAILED
+                            job.error_message = "One or more QC jobs failed"
+                            db.commit()
+                            continue
+
+                        if all_completed:
+                            reused_count = len(reused_qc_job_ids)
+                            self.logger.info(f"去溶剂化任务 {job.id} 的所有 QC 任务已完成 (复用了 {reused_count} 个)，开始 Phase 2 计算")
+                            try:
+                                result = run_desolvation_job(job, db)
+                                if result['success']:
+                                    self.logger.info(f"去溶剂化任务 {job.id} Phase 2 完成")
+                                else:
+                                    self.logger.error(f"去溶剂化任务 {job.id} Phase 2 失败: {result.get('error')}")
+                            except Exception as e:
+                                self.logger.error(f"去溶剂化任务 {job.id} Phase 2 异常: {e}", exc_info=True)
+                                job.status = JobStatus.FAILED
+                                job.error_message = str(e)
+                                db.commit()
+                        else:
+                            pending_count = len(pending_qc_job_ids)
+                            self.logger.debug(f"去溶剂化任务 {job.id} 仍在等待 {pending_count} 个 QC 任务完成")
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            self.logger.error(f"检查等待中的去溶剂化任务失败: {e}", exc_info=True)
+
+    def _extract_single_ligand(self, coord_lines: List[str], mol_order: List[dict], ligand_name: str) -> Optional[str]:
+        """从 cluster 坐标中提取单个配体分子"""
+        current_idx = 1  # 跳过第一个原子（Li+）
+
+        for mol_info in mol_order:
+            mol_name = mol_info.get('mol_name', '')
+            atom_count = mol_info.get('atom_count', 0)
+
+            if mol_name == ligand_name:
+                ligand_coords = coord_lines[current_idx:current_idx + atom_count]
+                if len(ligand_coords) != atom_count:
+                    self.logger.error(f"Failed to extract {ligand_name}: expected {atom_count} atoms, got {len(ligand_coords)}")
+                    return None
+
+                xyz_lines = [str(atom_count), ligand_name] + ligand_coords
+                return '\n'.join(xyz_lines) + '\n'
+
+            current_idx += atom_count
+
+        self.logger.error(f"Ligand {ligand_name} not found in mol_order")
+        return None
+
+    def _extract_dimer(self, coord_lines: List[str], mol_order: List[dict], ligand_name: str) -> Optional[str]:
+        """从 cluster 坐标中提取 Li+ 和一个配体分子（dimer）"""
+        li_coord = coord_lines[0]
+        current_idx = 1
+
+        for mol_info in mol_order:
+            mol_name = mol_info.get('mol_name', '')
+            atom_count = mol_info.get('atom_count', 0)
+
+            if mol_name == ligand_name:
+                ligand_coords = coord_lines[current_idx:current_idx + atom_count]
+                if len(ligand_coords) != atom_count:
+                    self.logger.error(f"Failed to extract dimer {ligand_name}: expected {atom_count} atoms, got {len(ligand_coords)}")
+                    return None
+
+                total_atoms = 1 + atom_count
+                xyz_lines = [str(total_atoms), f"Li-{ligand_name}", li_coord] + ligand_coords
+                return '\n'.join(xyz_lines) + '\n'
+
+            current_idx += atom_count
+
+        self.logger.error(f"Ligand {ligand_name} not found in mol_order for dimer")
+        return None
+
+    def _extract_cluster_minus(self, coord_lines: List[str], mol_order: List[dict], exclude_ligands: Dict[str, int]) -> Optional[str]:
+        """从 cluster 坐标中提取 cluster_minus（Li+ + 除了指定配体外的所有配体）"""
+        if not coord_lines:
+            self.logger.error("coord_lines is empty")
+            return None
+
+        if len(coord_lines) < 1:
+            self.logger.error(f"coord_lines has insufficient atoms: {len(coord_lines)}")
+            return None
+
+        li_coord = coord_lines[0]
+        included_coords = [li_coord]
+        current_idx = 1
+
+        for mol_info in mol_order:
+            mol_name = mol_info.get('mol_name', '')
+            atom_count = mol_info.get('atom_count', 0)
+
+            if mol_name in exclude_ligands and exclude_ligands[mol_name] > 0:
+                exclude_ligands[mol_name] -= 1
+                current_idx += atom_count
+            else:
+                mol_coords = coord_lines[current_idx:current_idx + atom_count]
+                if len(mol_coords) == atom_count:
+                    included_coords.extend(mol_coords)
+                else:
+                    self.logger.warning(f"Expected {atom_count} atoms for {mol_name}, got {len(mol_coords)}")
+                current_idx += atom_count
+
+        total_atoms = len(included_coords)
+        if total_atoms < 2:
+            self.logger.error(f"Extracted cluster_minus has too few atoms: {total_atoms}")
+            return None
+
+        xyz_lines = [str(total_atoms), "cluster_minus"] + included_coords
+        return '\n'.join(xyz_lines) + '\n'
+
+    def _sanitize_filename(self, name: str) -> str:
+        """清理文件名，去除不安全字符"""
+        import re
+        # 替换不安全字符
+        safe = re.sub(r'[^\w\-.]', '_', name)
+        # 去除连续的下划线
+        safe = re.sub(r'_+', '_', safe)
+        # 去除首尾的下划线
+        safe = safe.strip('_')
+        return safe or 'molecule'
+
+    def _generate_gaussian_input(self, gjf_path: Path, molecule_name: str, smiles: str,
+                                   charge: int, spin_multiplicity: int,
+                                   functional: str, basis_set: str,
+                                   solvent_model: str, solvent_name: str,
+                                   solvent_config: Dict = None,
+                                   xyz_content: str = None,
+                                   retry_level: int = 0,
+                                   nprocs: int = 16):
+        """
+        生成 Gaussian 输入文件
+
+        Args:
+            gjf_path: 输出文件路径
+            molecule_name: 分子名称
+            smiles: SMILES 字符串（用于普通 QC 任务）
+            charge: 电荷
+            spin_multiplicity: 自旋多重度
+            functional: 泛函
+            basis_set: 基组
+            solvent_model: 溶剂模型 (gas/pcm/smd/custom)
+            solvent_name: 溶剂名称
+            solvent_config: 自定义溶剂参数
+            xyz_content: XYZ 坐标内容（用于 desolvation 创建的 QC 任务）
+            retry_level: 重试级别 (0=首次, 1+=重试)
+            nprocs: CPU 核心数
+        """
+        # 导入 QC 安全机制模块
+        try:
+            from qc_safety import check_structure, get_robust_keywords, SCF_CONVERGENCE_STRATEGIES, detect_symmetric_polyhedra
+            has_safety_module = True
+        except ImportError:
+            has_safety_module = False
+            self.logger.warning("未找到 qc_safety 模块，使用默认设置")
+
+        # 检测是否是高度对称的多面体分子
+        symmetric_config = None
+        if has_safety_module:
+            symmetric_config = detect_symmetric_polyhedra(molecule_name)
+            if symmetric_config:
+                self.logger.info(f"检测到对称分子: {symmetric_config['name']} ({symmetric_config['geometry']})")
+                self.logger.info(f"将使用特殊的优化关键词: {symmetric_config['special_keywords']}")
+
+        # 构建计算关键字
+        keywords = f"opt freq {functional}/{basis_set}"
+
+        # 添加色散校正（对于DFT方法）
+        if functional.upper() not in ["HF"]:
+            keywords += " em=gd3bj"
+
+        # 对于对称分子，使用特殊的优化关键词
+        if symmetric_config:
+            # 替换 opt 关键词为特殊的对称分子优化设置
+            keywords = keywords.replace("opt freq", symmetric_config['special_keywords'])
+            self.logger.info(f"对称分子 {symmetric_config['name']} 使用特殊关键词: {symmetric_config['special_keywords']}")
+        else:
+            # 添加 SCF 收敛辅助关键词
+            atom_count = 0
+            if xyz_content:
+                atom_count = len([l for l in xyz_content.strip().split('\n') if l.strip() and len(l.split()) >= 4])
+
+            # 检查是否含有金属（用于选择更稳健的 SCF 策略）
+            has_metal = False
+            metals = {'Li', 'Na', 'K', 'Mg', 'Ca', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Mn'}
+            if xyz_content:
+                for line in xyz_content.strip().split('\n'):
+                    parts = line.split()
+                    if parts:
+                        elem = ''.join(c for c in parts[0] if not c.isdigit())
+                        if elem in metals:
+                            has_metal = True
+                            break
+
+            # 根据体系特点和重试级别添加 SCF 设置
+            if has_safety_module:
+                scf_keywords = get_robust_keywords(atom_count, has_metal, retry_level)
+            else:
+                # 默认的稳健设置
+                if retry_level == 0:
+                    if atom_count > 50 or has_metal:
+                        scf_keywords = "scf=(maxcycle=200,xqc)"
+                    else:
+                        scf_keywords = "scf=(maxcycle=150)"
+                elif retry_level == 1:
+                    scf_keywords = "scf=(maxcycle=300,xqc,novaracc)"
+                elif retry_level == 2:
+                    scf_keywords = "scf=(maxcycle=300,xqc,vshift=500)"
+                else:
+                    scf_keywords = "scf=(maxcycle=400,qc,nodamping,novaracc)"
+
+            if scf_keywords:
+                keywords += f" {scf_keywords}"
+
+        # 自定义溶剂参数块（用于custom模型）
+        custom_solvent_params = ""
+
+        # 添加溶剂效应
+        if solvent_model and solvent_model.lower() != 'gas':
+            if solvent_model.lower() == 'pcm':
+                keywords += f" scrf=(pcm,solvent={solvent_name or 'water'})"
+            elif solvent_model.lower() == 'smd':
+                keywords += f" scrf=(smd,solvent={solvent_name or 'water'})"
+            elif solvent_model.lower() == 'custom':
+                # 自定义溶剂参数 - 使用 SMD 模型的 Generic 溶剂
+                keywords += " scrf=(smd,solvent=generic,read)"
+                if solvent_config:
+                    eps = solvent_config.get('eps', 78.3553)
+                    eps_inf = solvent_config.get('eps_inf', 1.778)
+                    hbond_acidity = solvent_config.get('hbond_acidity', 0.82)
+                    hbond_basicity = solvent_config.get('hbond_basicity', 0.35)
+                    surface_tension = solvent_config.get('surface_tension', 71.99)
+                    carbon_aromaticity = solvent_config.get('carbon_aromaticity', 0.0)
+                    halogenicity = solvent_config.get('halogenicity', 0.0)
+
+                    custom_solvent_params = (
+                        f"eps={eps}\n"
+                        f"epsinf={eps_inf}\n"
+                        f"HBondAcidity={hbond_acidity}\n"
+                        f"HBondBasicity={hbond_basicity}\n"
+                        f"SurfaceTension={surface_tension}\n"
+                        f"AromaticCarbon={carbon_aromaticity}\n"
+                        f"Halogen={halogenicity}\n"
+                    )
+
+        safe_name = self._sanitize_filename(molecule_name)
+
+        # 获取坐标：优先使用 xyz_content（来自 desolvation），否则从 SMILES 生成
+        coords = None
+        xyz_parse_failed = False
+
+        if xyz_content:
+            # 解析 xyz_content 获取坐标
+            coords = self._parse_xyz_content(xyz_content)
+            if coords:
+                self.logger.info(f"从 xyz_content 解析坐标: {len(coords)} 个原子")
+            else:
+                xyz_parse_failed = True
+                self.logger.warning(f"xyz_content 解析失败，分子: {molecule_name}")
+
+        if not coords:
+            # 如果 xyz_content 存在但解析失败，且 SMILES 为 None，则抛出错误
+            if xyz_parse_failed and not smiles:
+                raise ValueError(
+                    f"无法为 {molecule_name} 获取3D坐标：\n"
+                    f"1. xyz_content 存在但解析失败\n"
+                    f"2. SMILES 为 None，无法从 SMILES 生成坐标\n"
+                    f"请检查 xyz_content 格式是否正确（应为 XYZ 格式：第一行原子数，第二行注释，后续行为坐标）"
+                )
+
+            # 降级：尝试从 SMILES 生成 3D 坐标
+            if smiles:
+                coords = self._get_3d_coordinates(smiles, molecule_name)
+            else:
+                # 既没有有效的 xyz_content，也没有 SMILES
+                raise ValueError(
+                    f"无法为 {molecule_name} 获取3D坐标：既没有有效的 xyz_content，也没有 SMILES"
+                )
+
+        # 验证坐标是否成功获取
+        if not coords:
+            raise ValueError(
+                f"无法为 {molecule_name} 获取3D坐标。\n"
+                f"请检查：\n"
+                f"1. 如果提供了 xyz_content，请确保格式正确（XYZ 格式）\n"
+                f"2. 如果提供了 SMILES，请确保 SMILES 有效\n"
+                f"3. 如果都没有提供，请至少提供其中一个"
+            )
+
+        # 验证和纠正自旋多重度（只对有有效坐标的情况）
+        corrected_charge, corrected_spin = self._validate_and_correct_spin(
+            smiles, charge, spin_multiplicity, coords
+        )
+
+        if corrected_charge != charge or corrected_spin != spin_multiplicity:
+            self.logger.warning(
+                f"自旋多重度已纠正: charge {charge}->{corrected_charge}, "
+                f"spin {spin_multiplicity}->{corrected_spin} for {molecule_name}"
+            )
+            charge = corrected_charge
+            spin_multiplicity = corrected_spin
+
+        # 根据 CPU 核心数动态设置内存（大约每核 0.5-1GB）
+        mem_gb = max(4, min(nprocs, 32))  # 4-32GB 范围
+
+        # 生成 gjf 内容
+        gjf_content = f"""%nprocshared={nprocs}
+%mem={mem_gb}GB
+%chk={safe_name}.chk
+# {keywords}
+
+{molecule_name}
+
+{charge} {spin_multiplicity}
+"""
+
+        if coords:
+            for atom, x, y, z in coords:
+                gjf_content += f" {atom:<2}  {x:>12.8f}  {y:>12.8f}  {z:>12.8f}\n"
+        else:
+            # 如果无法生成坐标，记录错误并使用注释
+            self.logger.error(
+                f"无法为 {molecule_name} (SMILES: {smiles}) 生成3D坐标。"
+                f"请在 {self.config['local']['initial_salts_path']} 目录下添加对应的 PDB 文件。"
+            )
+            gjf_content += f"! SMILES: {smiles}\n"
+            gjf_content += "! 错误: 无法生成3D坐标\n"
+            gjf_content += "! 请手动添加分子坐标或提供 PDB 文件\n"
+
+        gjf_content += "\n"  # 空行结尾
+
+        # 添加自定义溶剂参数块（如果有的话）
+        if custom_solvent_params:
+            gjf_content += custom_solvent_params
+            gjf_content += "\n"  # 参数块后的空行
+
+        with open(gjf_path, 'w') as f:
+            f.write(gjf_content)
+
+    def _get_3d_coordinates(self, smiles: str, molecule_name: str):
+        """从 SMILES 或 PDB 文件获取 3D 坐标"""
+        # 如果 SMILES 为 None，只能尝试从 PDB 文件加载
+        if not smiles:
+            self.logger.warning(f"SMILES 为 None，只能尝试从 PDB 文件加载坐标: {molecule_name}")
+
+        # 首先尝试从 initial_salts 目录加载 PDB 文件
+        initial_salts_path = Path(self.config['local']['initial_salts_path'])
+
+        # 提取基础分子名称（去除计算参数）
+        # 例如: "FSI-B3LYP-6-31ppgd,p-pcm-TetraHydroFuran" -> "FSI"
+        import re
+        base_name = molecule_name.split('-')[0] if '-' in molecule_name else molecule_name
+        base_name = base_name.split('_')[0] if '_' in molecule_name else base_name
+
+        # 清理名称（去除 +/- 符号）
+        clean_name = molecule_name.replace("+", "").replace("-", "").strip()
+        clean_base_name = base_name.replace("+", "").replace("-", "").strip()
+
+        # 尝试多种可能的文件名
+        possible_paths = [
+            initial_salts_path / f"{base_name}.pdb",  # 基础名称（保留符号）
+            initial_salts_path / f"{clean_base_name}.pdb",  # 基础名称（去除符号）
+            initial_salts_path / f"{molecule_name}.pdb",  # 完整名称
+            initial_salts_path / f"{clean_name}.pdb",  # 完整名称（去除符号）
+        ]
+
+        for pdb_path in possible_paths:
+            if pdb_path.exists():
+                coords = self._parse_pdb_coordinates(pdb_path)
+                if coords:
+                    self.logger.info(f"从 PDB 文件加载坐标: {pdb_path}")
+                    return coords
+
+        # 尝试使用 RDKit 从 SMILES 生成坐标
+        if not smiles:
+            self.logger.error(f"无法为 {molecule_name} 生成3D坐标：SMILES 为 None，且 initial_salts 中没有对应的 PDB 文件")
+            return None
+
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol:
+                mol = Chem.AddHs(mol)
+
+                # 尝试多种方法生成3D坐标
+                result = AllChem.EmbedMolecule(mol, randomSeed=42)
+
+                if result == -1:
+                    # 第一次失败，尝试使用随机坐标
+                    self.logger.warning(f"第一次尝试失败，使用随机坐标方法: {smiles}")
+                    result = AllChem.EmbedMolecule(mol, useRandomCoords=True, maxAttempts=100, randomSeed=42)
+
+                if result == -1:
+                    # 第二次失败，尝试使用ETKDGv3方法
+                    self.logger.warning(f"第二次尝试失败，使用ETKDGv3方法: {smiles}")
+                    params = AllChem.ETKDGv3()
+                    params.randomSeed = 42
+                    result = AllChem.EmbedMolecule(mol, params)
+
+                if result == -1:
+                    self.logger.error(f"无法为 {smiles} 生成3D坐标")
+                    return None
+
+                # 尝试优化几何结构
+                try:
+                    AllChem.MMFFOptimizeMolecule(mol)
+                except Exception as opt_error:
+                    self.logger.warning(f"MMFF优化失败: {opt_error}，使用未优化的坐标")
+
+                coords = []
+                conf = mol.GetConformer()
+                for i, atom in enumerate(mol.GetAtoms()):
+                    pos = conf.GetAtomPosition(i)
+                    coords.append((atom.GetSymbol(), pos.x, pos.y, pos.z))
+
+                self.logger.info(f"从 SMILES 生成 3D 坐标 (共 {len(coords)} 个原子)")
+                return coords
+        except ImportError:
+            self.logger.warning("RDKit 未安装，无法从 SMILES 生成坐标")
+        except Exception as e:
+            self.logger.warning(f"从 SMILES 生成坐标失败: {e}")
+
+        return None
+
+    def _parse_xyz_content(self, xyz_content: str) -> list:
+        """
+        解析 XYZ 格式的坐标内容
+
+        XYZ 格式:
+        第一行: 原子数
+        第二行: 注释（可选）
+        后续行: 元素符号 x y z
+
+        Args:
+            xyz_content: XYZ 格式的字符串
+
+        Returns:
+            坐标列表 [(element, x, y, z), ...]
+        """
+        if not xyz_content or not xyz_content.strip():
+            return None
+
+        try:
+            lines = xyz_content.strip().split('\n')
+            if len(lines) < 3:
+                self.logger.warning(f"XYZ 内容行数不足: {len(lines)}")
+                return None
+
+            # 第一行是原子数
+            try:
+                num_atoms = int(lines[0].strip())
+            except ValueError:
+                self.logger.warning(f"无法解析原子数: {lines[0]}")
+                return None
+
+            # 跳过第一行（原子数）和第二行（注释），从第三行开始解析坐标
+            coords = []
+            for i, line in enumerate(lines[2:], start=1):
+                line = line.strip()
+                if not line:
+                    continue
+
+                parts = line.split()
+                if len(parts) < 4:
+                    self.logger.warning(f"坐标行格式错误 (行 {i+2}): {line}")
+                    continue
+
+                element = parts[0]
+                try:
+                    x = float(parts[1])
+                    y = float(parts[2])
+                    z = float(parts[3])
+                    coords.append((element, x, y, z))
+                except ValueError as e:
+                    self.logger.warning(f"坐标解析错误 (行 {i+2}): {e}")
+                    continue
+
+            if len(coords) != num_atoms:
+                self.logger.warning(f"解析的原子数 ({len(coords)}) 与声明的原子数 ({num_atoms}) 不匹配")
+
+            if coords:
+                self.logger.info(f"成功解析 XYZ 坐标: {len(coords)} 个原子")
+                return coords
+            else:
+                return None
+
+        except Exception as e:
+            self.logger.error(f"解析 XYZ 内容失败: {e}")
+            return None
+
+    def _validate_and_correct_spin(self, smiles: str, charge: int, spin_multiplicity: int,
+                                     coords: list = None) -> tuple:
+        """
+        验证并纠正自旋多重度
+
+        Args:
+            smiles: SMILES 字符串
+            charge: 电荷
+            spin_multiplicity: 自旋多重度
+            coords: 坐标列表 [(atom, x, y, z), ...]
+
+        Returns:
+            (corrected_charge, corrected_spin)
+        """
+        try:
+            from rdkit import Chem
+
+            # 如果有坐标，从坐标计算电子数
+            if coords:
+                total_electrons = 0
+                for atom_symbol, x, y, z in coords:
+                    # 原子序数映射
+                    atomic_numbers = {
+                        'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'P': 15, 'S': 16, 'Cl': 17,
+                        'Li': 3, 'Na': 11, 'K': 19, 'Mg': 12, 'Ca': 20, 'Al': 13, 'Si': 14,
+                        'B': 5, 'Br': 35, 'I': 53
+                    }
+                    total_electrons += atomic_numbers.get(atom_symbol, 0)
+                total_electrons -= charge
+
+                # 根据电子数判断自旋多重度
+                if total_electrons % 2 == 0:
+                    correct_spin = 1
+                else:
+                    correct_spin = 2
+
+                if correct_spin != spin_multiplicity:
+                    self.logger.warning(
+                        f"从坐标验证: {len(coords)} 个原子, {total_electrons} 个电子, "
+                        f"自旋多重度应为 {correct_spin} (当前为 {spin_multiplicity})"
+                    )
+                    return charge, correct_spin
+
+            # 如果没有坐标，从 SMILES 计算
+            else:
+                mol = Chem.MolFromSmiles(smiles)
+                if mol is None:
+                    return charge, spin_multiplicity
+
+                # 添加氢原子以获得完整的电子数
+                mol_with_h = Chem.AddHs(mol)
+
+                # 计算总电荷
+                total_charge = sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
+
+                # 计算总电子数
+                total_electrons = sum(atom.GetAtomicNum() for atom in mol_with_h.GetAtoms())
+                total_electrons -= total_charge
+
+                # 检查是否有显式自由基
+                num_radical_electrons = sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
+
+                if num_radical_electrons > 0:
+                    correct_spin = num_radical_electrons + 1
+                else:
+                    if total_electrons % 2 == 0:
+                        correct_spin = 1
+                    else:
+                        correct_spin = 2
+
+                if correct_spin != spin_multiplicity or total_charge != charge:
+                    self.logger.warning(
+                        f"从 SMILES 验证: {total_electrons} 个电子, {num_radical_electrons} 个自由基电子, "
+                        f"电荷应为 {total_charge} (当前为 {charge}), "
+                        f"自旋多重度应为 {correct_spin} (当前为 {spin_multiplicity})"
+                    )
+                    return total_charge, correct_spin
+
+        except Exception as e:
+            self.logger.warning(f"验证自旋多重度失败: {e}")
+
+        return charge, spin_multiplicity
+
+    def _parse_pdb_coordinates(self, pdb_path: Path):
+        """解析 PDB 文件坐标"""
+        coords = []
+
+        # 尝试不同的编码
+        encodings = ['utf-8', 'latin1', 'gbk', 'gb2312']
+
+        for encoding in encodings:
+            try:
+                with open(pdb_path, 'r', encoding=encoding) as f:
+                    for line in f:
+                        if line.startswith('ATOM') or line.startswith('HETATM'):
+                            try:
+                                # PDB 格式: ATOM/HETATM, atom_num, atom_name, ..., x, y, z
+                                # 标准 PDB 格式的列位置
+                                atom_name = line[12:16].strip()
+
+                                # 提取元素符号
+                                # 优先使用 76-78 列的元素符号（如果存在）
+                                if len(line) > 76:
+                                    element = line[76:78].strip()
+                                    if element:
+                                        # 去掉电荷符号（如 Mg2+）
+                                        element = ''.join(c for c in element if c.isalpha())
+
+                                # 如果没有元素符号列，从原子名称提取
+                                if not element or not element.strip():
+                                    element = ''.join(c for c in atom_name if c.isalpha())
+
+                                if not element:
+                                    element = atom_name[0] if atom_name else 'C'
+
+                                # 提取坐标（标准 PDB 格式）
+                                x = float(line[30:38].strip())
+                                y = float(line[38:46].strip())
+                                z = float(line[46:54].strip())
+
+                                coords.append((element, x, y, z))
+                            except (ValueError, IndexError) as e:
+                                # 跳过无法解析的行
+                                self.logger.debug(f"跳过无法解析的 PDB 行: {line.strip()}, 错误: {e}")
+                                continue
+
+                # 如果成功读取到坐标，返回结果
+                if coords:
+                    self.logger.debug(f"使用 {encoding} 编码成功解析 PDB 文件: {pdb_path}")
+                    return coords
+
+            except UnicodeDecodeError:
+                # 尝试下一个编码
+                continue
+            except Exception as e:
+                self.logger.warning(f"使用 {encoding} 编码解析 PDB 文件失败: {e}")
+                continue
+
+        # 所有编码都失败
+        if not coords:
+            self.logger.warning(f"无法解析 PDB 文件 {pdb_path}（尝试了所有编码）")
+
+        return coords if coords else None
+
+    def _generate_qc_job_script(self, script_path: Path, safe_name: str,
+                                  partition: str, cpus: int, time_limit: int, work_dir: Path = None):
+        """生成 QC 任务的 Slurm 作业脚本
+
+        Args:
+            script_path: 脚本文件路径
+            safe_name: 安全的文件名
+            partition: Slurm 分区
+            cpus: CPU 核心数
+            time_limit: 时间限制（分钟）
+            work_dir: 工作目录（用于处理包含特殊字符的路径）
+        """
+        safe_job_name = f"QC_{safe_name}"[:64]
+
+        # 如果提供了 work_dir，使用完整路径；否则使用 $SLURM_SUBMIT_DIR
+        if work_dir:
+            work_dir_str = str(work_dir)
+            cd_command = f'cd "{work_dir_str}"'
+        else:
+            cd_command = 'cd $SLURM_SUBMIT_DIR'
+
+        script_content = f"""#!/bin/bash
+#SBATCH --job-name={safe_job_name}
+#SBATCH --output=qc_out.log
+#SBATCH --error=qc_err.log
+#SBATCH --partition={partition}
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --time={time_limit}
+
+# 进入工作目录
+{cd_command}
+
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to change to work directory"
+    exit 1
+fi
+
+# 设置 Gaussian 环境
+export g16root=/public/software
+export GAUSS_SCRDIR=/public/software/g16/scratch
+source /public/software/g16/bsd/g16.profile
+
+# 运行 Gaussian
+ulimit -s unlimited
+g16 < "{safe_name}.gjf" > "{safe_name}_out.log" 2>&1
+
+# 转换 checkpoint 文件
+if [ -f "{safe_name}.chk" ]; then
+    formchk "{safe_name}.chk" "{safe_name}.fchk"
+fi
+
+echo "QC calculation completed"
+"""
+
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+
+        import os
+        os.chmod(script_path, 0o755)
+
+    def _submit_to_slurm(self, work_dir: Path) -> Dict[str, Any]:
+        """提交任务到 Slurm"""
+        import re
+
+        job_script = work_dir / "job.sh"
+
+        if not job_script.exists():
+            return {'success': False, 'error': f'Job script not found: {job_script}'}
+
+        try:
+            result = subprocess.run(
+                ['sbatch', str(job_script)],
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode != 0:
+                return {'success': False, 'error': f'sbatch failed: {result.stderr}'}
+
+            # 解析 Slurm job ID
+            output = result.stdout.strip()
+            match = re.search(r'Submitted batch job (\d+)', output)
+
+            if match:
+                slurm_job_id = match.group(1)
+                return {'success': True, 'slurm_job_id': slurm_job_id}
+            else:
+                return {'success': False, 'error': f'Could not parse Slurm job ID from: {output}'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'sbatch command timed out'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _check_running_jobs(self):
+        """检查运行中的任务状态"""
+        completed_jobs = []
+
+        for job_id, job_info in list(self.running_jobs.items()):
+            try:
+                job_type = job_info['type']
+
+                # 处理等待 RESP 的 MD 任务
+                if job_type == 'md_waiting_resp':
+                    self._check_md_waiting_resp(job_id, job_info, completed_jobs)
+                    continue
+
+                slurm_job_id = job_info['slurm_job_id']
+
+                # 检查任务是否被用户取消
+                actual_type = 'md' if job_type in ['md', 'md_waiting_resp'] else job_type
+                if self._check_if_cancelled(job_id, actual_type):
+                    self.logger.info(f"任务 {job_id} 已被用户取消，执行 scancel")
+                    self._cancel_slurm_job(slurm_job_id)
+                    completed_jobs.append(job_id)
+                    continue
+
+                # 获取当前任务在 API 中的状态，防止已完成的任务被重新标记为 CANCELLED
+                current_api_status = self._get_job_api_status(job_id, actual_type)
+                if current_api_status in ['COMPLETED', 'FAILED']:
+                    self.logger.info(f"任务 {job_id} 已是 {current_api_status} 状态，跳过状态检查")
+                    completed_jobs.append(job_id)
+                    continue
+
+                # 检查 Slurm 状态，同时传入工作目录用于容错恢复
+                work_dir = job_info.get('work_dir')
+                status = self._check_slurm_status(slurm_job_id, work_dir)
+
+                if status == 'QUEUED':
+                    # Slurm 任务还在排队，更新数据库状态为 QUEUED
+                    self._update_job_status(job_id, 'QUEUED', actual_type, slurm_job_id=slurm_job_id)
+
+                elif status == 'RUNNING':
+                    # Slurm 任务正在运行，更新数据库状态为 RUNNING
+                    self._update_job_status(job_id, 'RUNNING', actual_type, slurm_job_id=slurm_job_id)
+
+                elif status == 'COMPLETED':
+                    self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 已完成")
+                    self._handle_job_completion(job_id, job_info)
+                    completed_jobs.append(job_id)
+
+                elif status == 'FAILED':
+                    self.logger.error(f"任务 {job_id} (Slurm: {slurm_job_id}) 失败")
+                    # 获取失败原因
+                    error_msg = self._get_job_failure_reason(slurm_job_id, job_info.get('work_dir'))
+
+                    # 对于 QC 任务，尝试自动重试
+                    if actual_type == 'qc':
+                        retry_success = self._try_qc_retry(job_id, job_info, error_msg)
+                        if retry_success:
+                            # 重试已提交，不移除任务
+                            continue
+
+                    # 获取 CPU 核时，即使任务失败也要记录
+                    cpu_hours = None
+                    if actual_type in ['md', 'qc']:
+                        cpu_hours = self._get_job_cpu_hours(slurm_job_id)
+                        self.logger.info(f"任务 {job_id} 失败时的 CPU hours: {cpu_hours:.2f}")
+
+                    self._update_job_status(job_id, 'FAILED', actual_type, error_message=error_msg, cpu_hours=cpu_hours)
+                    completed_jobs.append(job_id)
+
+                elif status == 'CANCELLED':
+                    self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 已取消")
+                    self._update_job_status(job_id, 'CANCELLED', actual_type, error_message="任务被取消")
+                    completed_jobs.append(job_id)
+
+            except Exception as e:
+                self.logger.error(f"检查任务 {job_id} 状态失败: {e}")
+
+        # 移除已完成的任务
+        for job_id in completed_jobs:
+            if job_id in self.running_jobs:
+                del self.running_jobs[job_id]
+
+    def _try_qc_retry(self, job_id: int, job_info: Dict, error_msg: str) -> bool:
+        """
+        尝试自动重试 QC 任务
+
+        Args:
+            job_id: 任务 ID
+            job_info: 任务信息
+            error_msg: 错误信息
+
+        Returns:
+            是否成功提交重试
+        """
+        try:
+            # 导入 QC 安全机制模块
+            try:
+                from qc_safety import analyze_gaussian_error, generate_retry_gjf, QCRetryManager
+                has_safety_module = True
+            except ImportError:
+                self.logger.warning("未找到 qc_safety 模块，无法自动重试")
+                return False
+
+            # 检查重试次数
+            retry_count = job_info.get('retry_count', 0)
+            max_retries = 3
+
+            if retry_count >= max_retries:
+                self.logger.warning(f"QC 任务 {job_id} 已达到最大重试次数 ({max_retries})，不再重试")
+                return False
+
+            work_dir = Path(job_info['work_dir'])
+
+            # 读取 Gaussian 日志文件
+            log_files = list(work_dir.glob("*_out.log")) + list(work_dir.glob("*.log"))
+            if not log_files:
+                self.logger.warning(f"QC 任务 {job_id} 未找到日志文件，无法分析错误")
+                return False
+
+            log_content = log_files[0].read_text(errors='ignore')
+
+            # 分析错误
+            error_analysis = analyze_gaussian_error(log_content)
+
+            if not error_analysis.can_retry:
+                self.logger.info(f"QC 任务 {job_id} 错误类型 {error_analysis.error_type.value} 不可自动重试")
+                # 更新错误信息，添加建议
+                if error_analysis.suggestions:
+                    error_msg += f"\n建议: {'; '.join(error_analysis.suggestions)}"
+                return False
+
+            self.logger.info(f"QC 任务 {job_id} 准备第 {retry_count + 1} 次重试，错误类型: {error_analysis.error_type.value}")
+
+            # 找到原始 GJF 文件
+            gjf_files = list(work_dir.glob("*.gjf"))
+            if not gjf_files:
+                self.logger.warning(f"QC 任务 {job_id} 未找到 GJF 文件")
+                return False
+
+            original_gjf = gjf_files[0]
+
+            # 生成重试 GJF
+            new_gjf_content = generate_retry_gjf(original_gjf, retry_count + 1, error_analysis)
+
+            # 备份原始 GJF
+            backup_gjf = work_dir / f"{original_gjf.stem}_retry{retry_count}.gjf"
+            import shutil
+            shutil.copy(original_gjf, backup_gjf)
+
+            # 写入新的 GJF
+            with open(original_gjf, 'w') as f:
+                f.write(new_gjf_content)
+
+            self.logger.info(f"已更新 GJF 文件，使用策略: {error_analysis.retry_keywords or 'default'}")
+
+            # 重新提交到 Slurm
+            slurm_result = self._submit_to_slurm(work_dir)
+
+            if not slurm_result['success']:
+                self.logger.error(f"重试提交 Slurm 失败: {slurm_result.get('error')}")
+                return False
+
+            new_slurm_job_id = slurm_result['slurm_job_id']
+
+            # 更新任务信息
+            job_info['slurm_job_id'] = new_slurm_job_id
+            job_info['retry_count'] = retry_count + 1
+            job_info['last_error'] = error_analysis.error_type.value
+
+            # 更新 API 状态
+            retry_error_msg = f"自动重试第 {retry_count + 1} 次 (原因: {error_analysis.error_message})"
+            self._update_job_status(
+                job_id, 'RUNNING', 'qc',
+                slurm_job_id=new_slurm_job_id,
+                error_message=retry_error_msg
+            )
+
+            self.logger.info(f"✅ QC 任务 {job_id} 重试已提交 (Slurm: {new_slurm_job_id})")
+            self.logger.info(f"📝 重试信息 - 任务ID: {job_id}, 原Slurm ID: {job_info.get('slurm_job_id')}, 新Slurm ID: {new_slurm_job_id}, 重试次数: {retry_count + 1}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"QC 任务 {job_id} 重试失败: {e}", exc_info=True)
+            return False
+
+    def _check_md_waiting_resp(self, job_id: int, job_info: Dict, completed_jobs: List):
+        """
+        检查等待 RESP 完成的 MD 任务
+
+        Args:
+            job_id: MD 任务 ID
+            job_info: 任务信息
+            completed_jobs: 已完成任务列表
+        """
+        try:
+            # 检查任务是否被取消
+            if self._check_if_cancelled(job_id, 'md'):
+                self.logger.info(f"MD 任务 {job_id} 已被用户取消，取消所有 RESP 任务")
+                for resp_job in job_info.get('resp_jobs', []):
+                    if resp_job['status'] == 'RUNNING':
+                        self._cancel_slurm_job(resp_job['slurm_job_id'])
+                completed_jobs.append(job_id)
+                return
+
+            # 检查所有 RESP 任务状态
+            all_completed, any_failed = self._check_resp_jobs(job_id, job_info)
+
+            if all_completed:
+                self.logger.info(f"MD 任务 {job_id} 的所有 RESP 计算已完成，继续 MD 模拟")
+
+                # 从 job_info 恢复 wrapper 和 job
+                job = job_info['job']
+
+                # 如果有 RESP 任务失败，回退到 LigParGen 电荷
+                if any_failed:
+                    self.logger.warning(f"MD 任务 {job_id} 有 RESP 计算失败，回退到 LigParGen 电荷")
+                    job['config']['charge_method'] = 'ligpargen'
+
+                # 重新初始化 wrapper
+                from app.workers.molyte_wrapper import MolyteWrapper
+                wrapper = MolyteWrapper(
+                    work_base_path=Path(self.config['local']['work_base_path']),
+                    initial_salts_path=Path(self.config['local']['initial_salts_path']),
+                    ligpargen_path=Path(self.config['local']['ligpargen_path']),
+                    packmol_path=Path(self.config['local']['packmol_path']),
+                    ltemplify_path=Path(self.config['local']['ltemplify_path']),
+                    moltemplate_path=Path(self.config['local']['moltemplate_path']),
+                    charge_save_path=Path(self.config['local']['charge_save_path']),
+                )
+
+                # 继续 MD 任务
+                self._continue_md_job(job_id, job, wrapper)
+                # 注意：_continue_md_job 会更新 running_jobs[job_id]，所以不需要删除
+
+        except Exception as e:
+            self.logger.error(f"检查 RESP 状态失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'md', error_message=f"RESP check failed: {e}")
+            completed_jobs.append(job_id)
+
+    def _get_job_api_status(self, job_id: int, job_type: str) -> str:
+        """获取任务在 API 中的当前状态"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/check_cancelled"
+            params = {'job_type': job_type.upper()}
+
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                params=params,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('status', 'UNKNOWN')
+
+            return 'UNKNOWN'
+
+        except Exception as e:
+            self.logger.warning(f"获取任务 {job_id} API 状态失败: {e}")
+            return 'UNKNOWN'
+
+    def _check_if_cancelled(self, job_id: int, job_type: str) -> bool:
+        """检查任务是否被用户取消或删除（通过 API 查询）"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/check_cancelled"
+            params = {'job_type': job_type.upper()}
+
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                params=params,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('cancelled', False)
+
+            # 如果返回 404，说明任务已被删除，应该取消 Slurm 任务
+            if response.status_code == 404:
+                self.logger.warning(f"任务 {job_id} 在数据库中不存在（可能已被删除），将取消 Slurm 任务")
+                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.warning(f"检查任务 {job_id} 取消状态失败: {e}")
+            return False
+
+    def _cancel_slurm_job(self, slurm_job_id: str):
+        """取消 Slurm 任务"""
+        try:
+            cmd = f"scancel {slurm_job_id}"
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0:
+                self.logger.info(f"成功取消 Slurm 任务 {slurm_job_id}")
+            else:
+                self.logger.warning(f"取消 Slurm 任务失败: {result.stderr}")
+
+        except Exception as e:
+            self.logger.error(f"取消 Slurm 任务 {slurm_job_id} 失败: {e}")
+
+    def _check_slurm_status(self, slurm_job_id: str, work_dir: str = None) -> str:
+        """
+        检查 Slurm 任务状态
+
+        优先使用 Slurm 的历史记录（sacct），只在必要时才检查工作目录
+        """
+        try:
+            # 1. 先检查任务是否在当前队列中
+            cmd = f"squeue -j {slurm_job_id} -h -o %T"
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                status = result.stdout.strip()
+                # Slurm 状态: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED 等
+                if status == 'PENDING':
+                    return 'QUEUED'  # Slurm 排队中
+                elif status == 'RUNNING':
+                    return 'RUNNING'  # Slurm 正在运行
+                elif status == 'COMPLETING':
+                    return 'RUNNING'  # 正在完成，视为运行中
+                elif status == 'COMPLETED':
+                    return 'COMPLETED'
+                elif status == 'CANCELLED':
+                    return 'CANCELLED'
+                else:
+                    return 'FAILED'
+
+            # 2. 任务不在队列中，查询 Slurm 历史记录
+            # 使用更详细的 sacct 查询，获取完整的状态信息
+            cmd = f"sacct -j {slurm_job_id} --format=State --noheader --parsable2"
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                # sacct 可能返回多行（主任务 + 子任务），取第一行
+                status_line = result.stdout.strip().split('\n')[0]
+                status = status_line.strip()
+
+                self.logger.info(f"Slurm 历史记录查询: job_id={slurm_job_id}, status={status}")
+
+                if 'COMPLETED' in status:
+                    return 'COMPLETED'
+                elif 'CANCELLED' in status:
+                    return 'CANCELLED'
+                elif 'FAILED' in status or 'TIMEOUT' in status or 'OUT_OF_MEMORY' in status:
+                    return 'FAILED'
+                elif 'RUNNING' in status or 'PENDING' in status:
+                    return status.replace('PENDING', 'QUEUED')
+                else:
+                    # 其他状态视为失败
+                    self.logger.warning(f"未知的 Slurm 状态: {status}")
+                    return 'FAILED'
+
+            # 3. 如果 sacct 也找不到任务，检查工作目录中是否有完成标志
+            # 这是最后的容错机制
+            if work_dir:
+                self.logger.info(f"Slurm 历史记录中找不到任务 {slurm_job_id}，检查工作目录")
+                return self._check_work_dir_completion_status(work_dir)
+
+            return 'UNKNOWN'
+
+        except Exception as e:
+            self.logger.error(f"检查 Slurm 状态失败: {e}")
+            return 'UNKNOWN'
+
+    def _check_work_dir_completion_status(self, work_dir: str) -> str:
+        """
+        检查工作目录中是否有完成标志（最后的容错手段）
+
+        只在 Slurm 历史记录中找不到任务时调用。
+        如果找到完成标志，说明任务已经完成但 Slurm 历史记录已清除。
+        """
+        try:
+            work_path = Path(work_dir)
+            if not work_path.exists():
+                self.logger.warning(f"工作目录不存在: {work_dir}")
+                return 'UNKNOWN'
+
+            # 检查是否有 QC 完成标志
+            # QC 任务完成后会有 *_out.log 文件（Gaussian 输出）
+            log_files = list(work_path.glob("*_out.log"))
+            log_files = [f for f in log_files if f.name not in ("qc_out.log", "qc_err.log")]
+
+            if log_files:
+                # 找到 Gaussian 输出文件，说明 QC 任务已完成
+                self.logger.info(f"在工作目录中找到 Gaussian 输出文件: {log_files[0].name}，任务已完成")
+                return 'COMPLETED'
+
+            # 检查是否有 MD 完成标志
+            # MD 任务完成后会有 .dcd 文件
+            dcd_files = list(work_path.glob("*.dcd"))
+            if dcd_files:
+                self.logger.info(f"在工作目录中找到 DCD 文件: {dcd_files[0].name}，任务已完成")
+                return 'COMPLETED'
+
+            # 检查是否有错误标志
+            # 如果有 qc_err.log 或 md_err.log 且有内容，说明任务失败
+            err_files = list(work_path.glob("*_err.log"))
+            for err_file in err_files:
+                try:
+                    if err_file.stat().st_size > 100:  # 至少有 100 字节的错误信息
+                        self.logger.warning(f"在工作目录中找到错误文件: {err_file.name}，任务失败")
+                        return 'FAILED'
+                except:
+                    pass
+
+            self.logger.warning(f"无法从工作目录判断任务状态: {work_dir}")
+            return 'UNKNOWN'
+
+        except Exception as e:
+            self.logger.warning(f"检查工作目录完成状态失败: {e}")
+            return 'UNKNOWN'
+
+    def _get_job_failure_reason(self, slurm_job_id: str, work_dir: str = None) -> str:
+        """获取任务失败的原因"""
+        reasons = []
+
+        try:
+            # 1. 从 sacct 获取失败原因
+            cmd = f"sacct -j {slurm_job_id} -n -o State,ExitCode,Reason --parsable2"
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    parts = line.split('|')
+                    if len(parts) >= 3:
+                        state, exit_code, reason = parts[0], parts[1], parts[2]
+                        if 'FAILED' in state or 'TIMEOUT' in state or 'OUT_OF_MEMORY' in state:
+                            reasons.append(f"Slurm状态: {state}, 退出码: {exit_code}")
+                            if reason and reason != 'None':
+                                reasons.append(f"原因: {reason}")
+                            break
+
+            # 2. 检查 slurm 输出文件
+            if work_dir:
+                work_path = Path(work_dir)
+                slurm_out = work_path / f"slurm-{slurm_job_id}.out"
+                if slurm_out.exists():
+                    # 读取最后 50 行
+                    content = slurm_out.read_text()
+                    last_lines = content.strip().split('\n')[-50:]
+
+                    # 查找错误信息
+                    error_keywords = ['ERROR', 'Error', 'error', 'FATAL', 'Fatal',
+                                     'Segmentation fault', 'OOM', 'Out of memory',
+                                     'CANCELLED', 'TIME LIMIT', 'srun: error']
+                    for line in last_lines:
+                        if any(kw in line for kw in error_keywords):
+                            reasons.append(f"日志: {line.strip()[:200]}")
+                            break
+
+                # 3. 检查 LAMMPS 日志（如果是 MD 任务）
+                log_lammps = work_path / "log.lammps"
+                if log_lammps.exists():
+                    content = log_lammps.read_text()
+                    last_lines = content.strip().split('\n')[-30:]
+                    for line in last_lines:
+                        if 'ERROR' in line or 'error' in line.lower():
+                            reasons.append(f"LAMMPS: {line.strip()[:200]}")
+                            break
+
+                # 4. 检查 Gaussian 日志（如果是 QC 任务）
+                for log_file in work_path.glob("*.log"):
+                    content = log_file.read_text()
+                    if 'Error termination' in content or 'Convergence failure' in content:
+                        # 获取错误行
+                        lines = content.split('\n')
+                        for i, line in enumerate(lines):
+                            if 'Error termination' in line or 'Convergence failure' in line:
+                                reasons.append(f"Gaussian: {line.strip()[:200]}")
+                                break
+                        break
+
+        except Exception as e:
+            self.logger.error(f"获取失败原因时出错: {e}")
+            reasons.append(f"获取详细原因失败: {str(e)}")
+
+        if reasons:
+            return "; ".join(reasons)
+        else:
+            return f"Slurm 任务 {slurm_job_id} 失败，未能获取详细原因"
+
+    def _handle_job_completion(self, job_id: int, job_info: Dict):
+        """处理任务完成"""
+        try:
+            work_dir = Path(job_info['work_dir'])
+            job_type = job_info['type']
+
+            self.logger.info(f"开始处理任务 {job_id} ({job_type}) 的结果")
+
+            # 1. 上传结果文件到 OSS/COS
+            uploaded_files = self._upload_results_to_oss(job_id, work_dir, job_type)
+
+            # 2. 针对不同任务类型执行后处理
+            if job_type == 'qc':
+                # QC 任务：解析 Gaussian 输出并上传结果
+                qc_result = self._parse_gaussian_output(work_dir)
+                if qc_result:
+                    # 添加文件路径到结果
+                    qc_result['log_file_path'] = next(
+                        (f for f in uploaded_files if f.endswith('.log')), None
+                    )
+                    qc_result['fchk_file_path'] = next(
+                        (f for f in uploaded_files if f.endswith('.fchk')), None
+                    )
+
+                    # 生成 QC 可视化图片（ESP、HOMO、LUMO）
+                    fchk_files = list(work_dir.glob("*.fchk"))
+                    if fchk_files:
+                        fchk_file = fchk_files[0]
+                        try:
+                            vis_result = self._generate_qc_visualizations(work_dir, fchk_file)
+                            if vis_result:
+                                qc_result.update(vis_result)
+                                self.logger.info(f"QC 可视化生成成功: ESP={vis_result.get('esp_image_path')}, HOMO={vis_result.get('homo_image_path')}, LUMO={vis_result.get('lumo_image_path')}")
+
+                                # 上传新生成的PNG图片文件
+                                png_files = list(work_dir.glob("*.png"))
+                                if png_files:
+                                    additional_uploaded = self._upload_additional_files(job_id, png_files, job_type)
+                                    uploaded_files.extend(additional_uploaded)
+                                    self.logger.info(f"额外上传了 {len(additional_uploaded)} 个图片文件")
+
+                                    # 将COS图片路径添加到QC结果中
+                                    cos_image_paths = self._map_local_to_cos_paths(job_id, png_files, additional_uploaded)
+                                    qc_result.update(cos_image_paths)
+                                    self.logger.info(f"图片COS路径: {cos_image_paths}")
+                        except Exception as e:
+                            self.logger.warning(f"QC 可视化生成失败: {e}")
+
+                    # 上传 QC 结果到数据库
+                    try:
+                        self._upload_qc_result(job_id, qc_result)
+                    except Exception as e:
+                        # 上传失败时，不继续标记为COMPLETED
+                        self.logger.error(f"❌ QC结果上传失败，任务 {job_id} 已标记为FAILED")
+                        return  # 提前返回，不执行后续的COMPLETED状态更新
+                else:
+                    error_msg = f"未能解析 Gaussian 输出文件，可能计算未正常完成"
+                    self.logger.warning(f"⚠️ QC 任务 {job_id} {error_msg}")
+
+                    # 尝试自动重试
+                    if self._retry_failed_qc_job(job_id, job_info, error_msg):
+                        self.logger.info(f"✅ QC 任务 {job_id} 已自动重试")
+                        return  # 重试成功，提前返回
+
+                    # 无法重试，标记为失败（但仍然获取 CPU 核时）
+                    # 先获取 CPU 核时，然后标记为失败
+                    cpu_hours = None
+                    slurm_job_id = job_info.get('slurm_job_id')
+                    if slurm_job_id:
+                        cpu_hours = self._get_job_cpu_hours(slurm_job_id)
+                        self.logger.info(f"任务 {job_id} QC CPU hours: {cpu_hours:.2f}")
+
+                    self._update_job_status(job_id, 'FAILED', 'qc', error_message=error_msg, cpu_hours=cpu_hours)
+                    return  # 提前返回
+
+            elif job_type == 'md':
+                # MD 任务：解析 RDF、MSD 等结果并上传
+                md_results = self._parse_md_results(work_dir, job_id)
+                if md_results:
+                    self._upload_md_results(job_id, md_results)
+                else:
+                    self.logger.warning(f"MD 任务 {job_id} 未能解析结果数据")
+
+            # 3. 获取核时数
+            cpu_hours = None
+            resp_cpu_hours = None
+
+            if job_type in ['md', 'qc']:
+                slurm_job_id = job_info.get('slurm_job_id')
+                if slurm_job_id:
+                    cpu_hours = self._get_job_cpu_hours(slurm_job_id)
+                    self.logger.info(f"任务 {job_id} MD/QC CPU hours: {cpu_hours:.2f}")
+
+                # 获取 RESP 核时数（如果有）
+                resp_cpu_hours = job_info.get('resp_cpu_hours', 0.0)
+                if resp_cpu_hours > 0:
+                    self.logger.info(f"任务 {job_id} RESP CPU hours: {resp_cpu_hours:.2f}")
+
+            # 4. 更新任务状态为 COMPLETED
+            # 注意：当任务成功完成时，需要清除之前的错误信息（如果有重试过）
+            self._update_job_status(
+                job_id, 'COMPLETED', job_type,
+                result_files=uploaded_files,
+                progress=100.0,
+                cpu_hours=cpu_hours,
+                resp_cpu_hours=resp_cpu_hours,
+                error_message=None  # 清除之前的错误信息
+            )
+
+            self.logger.info(f"任务 {job_id} 处理完成，上传了 {len(uploaded_files)} 个文件")
+
+        except Exception as e:
+            self.logger.error(f"处理任务 {job_id} 完成失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', job_info['type'], error_message=str(e))
+
+    def _retry_failed_qc_job(self, job_id: int, job_info: Dict, error_msg: str) -> bool:
+        """
+        尝试自动重试失败的 QC 任务
+
+        Args:
+            job_id: QC 任务 ID
+            job_info: 任务信息
+            error_msg: 错误信息
+
+        Returns:
+            是否成功提交重试
+        """
+        try:
+            # 导入 QC 安全机制模块
+            try:
+                from qc_safety import analyze_gaussian_error, generate_retry_gjf
+                has_safety_module = True
+            except ImportError:
+                self.logger.warning("未找到 qc_safety 模块，无法自动重试")
+                return False
+
+            # 检查重试次数
+            retry_count = job_info.get('retry_count', 0)
+            max_retries = 3
+
+            if retry_count >= max_retries:
+                self.logger.warning(f"QC 任务 {job_id} 已达到最大重试次数 ({max_retries})，不再重试")
+                return False
+
+            work_dir = Path(job_info['work_dir'])
+
+            # 读取 Gaussian 日志文件
+            log_files = list(work_dir.glob("*_out.log")) + list(work_dir.glob("*.log"))
+            if not log_files:
+                self.logger.warning(f"QC 任务 {job_id} 未找到日志文件，无法分析错误")
+                return False
+
+            # 排除 Slurm 日志
+            gaussian_logs = [f for f in log_files if f.name not in ['qc_out.log', 'qc_err.log', 'slurm.log']]
+            if not gaussian_logs:
+                self.logger.warning(f"QC 任务 {job_id} 未找到 Gaussian 日志文件")
+                return False
+
+            log_content = gaussian_logs[0].read_text(errors='ignore')
+
+            # 分析错误
+            error_analysis = analyze_gaussian_error(log_content)
+
+            if not error_analysis.can_retry:
+                self.logger.info(f"QC 任务 {job_id} 错误类型 {error_analysis.error_type.value} 不可自动重试")
+                # 更新错误信息，添加建议
+                if error_analysis.suggestions:
+                    error_msg += f"\n建议: {'; '.join(error_analysis.suggestions)}"
+                return False
+
+            self.logger.info(f"QC 任务 {job_id} 准备第 {retry_count + 1} 次重试，错误类型: {error_analysis.error_type.value}")
+
+            # 找到原始 GJF 文件
+            gjf_files = list(work_dir.glob("*.gjf"))
+            if not gjf_files:
+                self.logger.warning(f"QC 任务 {job_id} 未找到 GJF 文件")
+                return False
+
+            original_gjf = gjf_files[0]
+
+            # 生成重试 GJF
+            new_gjf_content = generate_retry_gjf(original_gjf, retry_count + 1, error_analysis)
+
+            # 备份原始 GJF
+            backup_gjf = work_dir / f"{original_gjf.stem}_retry{retry_count}.gjf"
+            import shutil
+            shutil.copy(original_gjf, backup_gjf)
+
+            # 写入新的 GJF
+            with open(original_gjf, 'w') as f:
+                f.write(new_gjf_content)
+
+            self.logger.info(f"已更新 GJF 文件，使用策略: {error_analysis.retry_keywords or 'default'}")
+
+            # 重新提交到 Slurm
+            slurm_result = self._submit_to_slurm(work_dir)
+
+            if not slurm_result['success']:
+                self.logger.error(f"重试提交 Slurm 失败: {slurm_result.get('error')}")
+                return False
+
+            new_slurm_id = slurm_result['slurm_job_id']
+            self.logger.info(f"✅ QC 任务 {job_id} 重试提交成功，新 Slurm ID: {new_slurm_id}")
+
+            # 更新任务信息
+            job_info['slurm_job_id'] = new_slurm_id
+            job_info['retry_count'] = retry_count + 1
+            job_info['status'] = 'RUNNING'
+
+            # 更新后端状态
+            retry_error_msg = f"自动重试 ({retry_count + 1}/{max_retries}): {error_analysis.error_message}"
+            self._update_job_status(
+                job_id, 'RUNNING', 'qc',
+                slurm_job_id=new_slurm_id,
+                error_message=retry_error_msg
+            )
+
+            self.logger.info(f"📝 重试信息 - 任务ID: {job_id}, 原Slurm ID: {job_info.get('slurm_job_id')}, 新Slurm ID: {new_slurm_id}, 重试次数: {retry_count + 1}/{max_retries}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"QC 任务 {job_id} 重试失败: {e}", exc_info=True)
+            return False
+
+    def _get_job_cpu_hours(self, slurm_job_id: str) -> float:
+        """
+        获取 Slurm 任务的 CPU 核时数
+
+        优先使用 sacct 获取 CPUTimeRAW，如果失败则尝试使用 sstat 或 squeue
+        最后才使用时间差估算（会包括排队时间，但总比没有好）
+
+        Args:
+            slurm_job_id: Slurm 任务 ID
+
+        Returns:
+            CPU 核时数
+        """
+        try:
+            # 方法 1: 使用 sacct 获取 CPUTimeRAW（最准确）
+            result = subprocess.run(
+                ['sacct', '-j', slurm_job_id, '-o', 'CPUTimeRAW', '-n', '-X'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    cpu_time_seconds = int(result.stdout.strip().split()[0])
+                    if cpu_time_seconds > 0:
+                        cpu_hours = cpu_time_seconds / 3600.0
+                        self.logger.info(f"Job {slurm_job_id}: CPUTimeRAW={cpu_time_seconds}s, CPU hours={cpu_hours:.2f}h (from sacct)")
+                        return cpu_hours
+                except (ValueError, IndexError) as e:
+                    self.logger.warning(f"Failed to parse CPUTimeRAW for job {slurm_job_id}: {e}, output={result.stdout}")
+            else:
+                self.logger.warning(f"sacct command failed for job {slurm_job_id}: returncode={result.returncode}, stderr={result.stderr}")
+
+            # 方法 2: 如果 sacct 失败或返回 0，尝试使用 sstat
+            try:
+                result = subprocess.run(
+                    ['sstat', '-j', slurm_job_id, '-o', 'CPUTimeRAW', '-n', '-X'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    cpu_time_seconds = int(result.stdout.strip().split()[0])
+                    if cpu_time_seconds > 0:
+                        cpu_hours = cpu_time_seconds / 3600.0
+                        self.logger.info(f"Job {slurm_job_id}: CPUTimeRAW={cpu_time_seconds}s, CPU hours={cpu_hours:.2f}h (from sstat)")
+                        return cpu_hours
+            except Exception as e:
+                self.logger.debug(f"sstat command failed for job {slurm_job_id}: {e}")
+
+            # 方法 3: 如果以上都失败，返回 0.0
+            self.logger.warning(f"Could not retrieve CPU hours for job {slurm_job_id} using sacct or sstat")
+            return 0.0
+
+        except Exception as e:
+            self.logger.error(f"Failed to get CPU hours for job {slurm_job_id}: {e}")
+            return 0.0
+
+    def _parse_gaussian_output(self, work_dir: Path) -> Optional[Dict[str, Any]]:
+        """解析 Gaussian 输出文件，提取能量、HOMO、LUMO 等"""
+        import re
+
+        try:
+            # 查找真正的 Gaussian 输出文件
+            # 优先级：1. *_out.log (Gaussian输出) 2. *.out (备选) 3. 其他.log文件
+            gaussian_log_file = None
+
+            # 首先查找 *_out.log 格式的文件（这是真正的Gaussian输出）
+            out_log_files = list(work_dir.glob("*_out.log"))
+            if out_log_files:
+                # 排除 qc_out.log（这是Slurm的输出）
+                gaussian_files = [f for f in out_log_files if f.name != "qc_out.log"]
+                if gaussian_files:
+                    gaussian_log_file = gaussian_files[0]
+
+            # 如果没找到，尝试查找 .out 文件
+            if not gaussian_log_file:
+                out_files = list(work_dir.glob("*.out"))
+                if out_files:
+                    gaussian_log_file = out_files[0]
+
+            # 最后尝试其他 .log 文件（排除已知的非Gaussian文件）
+            if not gaussian_log_file:
+                log_files = list(work_dir.glob("*.log"))
+                excluded_names = {"qc_out.log", "qc_err.log", "slurm.log"}
+                gaussian_files = [f for f in log_files if f.name not in excluded_names]
+                if gaussian_files:
+                    gaussian_log_file = gaussian_files[0]
+
+            if not gaussian_log_file:
+                self.logger.warning(f"未找到 Gaussian 输出文件: {work_dir}")
+                return None
+
+            self.logger.info(f"解析 Gaussian 输出: {gaussian_log_file.name}")
+            content = gaussian_log_file.read_text(errors='ignore')
+
+            result = {}
+
+            # 使用后端成熟的解析逻辑
+            # 正则表达式模式
+            energy_pattern = re.compile(r'SCF Done:.*?=\s*([-\d.]+)')
+            alpha_occ_pattern = re.compile(r'Alpha\s+occ\.\s+eigenvalues\s+--\s+(.*)')
+            alpha_virt_pattern = re.compile(r'Alpha\s+virt\.\s+eigenvalues\s+--\s+(.*)')
+
+            last_energy = None
+            last_homo = None
+            last_lumo = None
+
+            # 逐行处理，确保配对匹配
+            lines = content.splitlines()
+            for i in range(len(lines) - 1):
+                # 匹配SCF能量
+                match_energy = energy_pattern.search(lines[i])
+                if match_energy:
+                    last_energy = float(match_energy.group(1))
+
+                # 匹配HOMO和LUMO（确保是连续的行）
+                match_occ = alpha_occ_pattern.search(lines[i])
+                match_virt = alpha_virt_pattern.search(lines[i + 1]) if i + 1 < len(lines) else None
+
+                if match_occ and match_virt:
+                    occ_values = match_occ.group(1).split()
+                    virt_values = match_virt.group(1).split()
+
+                    if occ_values:
+                        last_homo = float(occ_values[-1])
+                    if virt_values:
+                        last_lumo = float(virt_values[0])
+
+            # 设置结果
+            if last_energy is not None:
+                result['energy_au'] = last_energy
+                self.logger.info(f"SCF 能量: {result['energy_au']} Hartree")
+
+            if last_homo is not None:
+                result['homo'] = last_homo
+                self.logger.info(f"HOMO: {result['homo']} Hartree")
+
+            if last_lumo is not None:
+                result['lumo'] = last_lumo
+                self.logger.info(f"LUMO: {result['lumo']} Hartree")
+
+            # 计算 HOMO-LUMO gap (转换为 eV)
+            if 'homo' in result and 'lumo' in result:
+                gap_hartree = result['lumo'] - result['homo']
+                result['homo_lumo_gap'] = gap_hartree * 27.2114  # Hartree to eV
+                self.logger.info(f"HOMO-LUMO Gap: {result['homo_lumo_gap']:.3f} eV")
+
+            # 解析偶极矩
+            dipole_match = re.search(r'Dipole moment.*?Tot=\s*([\d.]+)', content, re.DOTALL)
+            if dipole_match:
+                result['dipole_moment'] = float(dipole_match.group(1))
+                self.logger.info(f"偶极矩: {result['dipole_moment']} Debye")
+
+            # 检查计算是否正常结束
+            if 'Normal termination' not in content:
+                self.logger.warning("Gaussian 计算未正常结束")
+                # 返回 None 表示失败，触发重试机制
+                return None
+
+            return result if result else None
+
+        except Exception as e:
+            self.logger.error(f"解析 Gaussian 输出失败: {e}", exc_info=True)
+            return None
+
+    def _generate_qc_visualizations(self, work_dir: Path, fchk_file: Path) -> Optional[Dict[str, Any]]:
+        """
+        生成 QC 可视化图片（ESP、HOMO、LUMO）
+        使用后端的 qc_postprocess 模块中的函数
+        """
+        import sys
+        import base64
+
+        try:
+            # 添加后端模块路径
+            backend_path = Path(__file__).parent.parent / "backend"
+            if str(backend_path) not in sys.path:
+                sys.path.insert(0, str(backend_path))
+
+            from app.tasks.qc_postprocess import (
+                generate_esp_visualization,
+                generate_orbital_visualization,
+                extract_esp_values
+            )
+
+            result = {}
+
+            # 获取分子名称
+            molecule_name = fchk_file.stem
+
+            # 1. 生成 ESP 图片
+            try:
+                esp_image_path = generate_esp_visualization(work_dir, molecule_name, str(fchk_file))
+                if esp_image_path:
+                    result['esp_image_path'] = esp_image_path
+                    self.logger.info(f"ESP 图片生成: {esp_image_path}")
+
+                    # 读取图片并转换为base64（用于混合云架构）
+                    try:
+                        with open(esp_image_path, 'rb') as f:
+                            esp_image_data = f.read()
+                            result['esp_image_content'] = base64.b64encode(esp_image_data).decode('utf-8')
+                            self.logger.info(f"ESP 图片已编码为base64，大小: {len(esp_image_data)} bytes")
+                    except Exception as e:
+                        self.logger.warning(f"读取ESP图片失败: {e}")
+
+                # 提取 ESP 极值
+                surfanalysis_file = work_dir / "surfanalysis.txt"
+                esp_min, esp_max = extract_esp_values(str(surfanalysis_file))
+                if esp_min is not None:
+                    result['esp_min_kcal'] = esp_min
+                if esp_max is not None:
+                    result['esp_max_kcal'] = esp_max
+            except Exception as e:
+                self.logger.warning(f"ESP 可视化生成失败: {e}")
+
+            # 2. 生成 HOMO 轨道图片
+            try:
+                homo_image_path = generate_orbital_visualization(work_dir, str(fchk_file), "HOMO")
+                if homo_image_path:
+                    result['homo_image_path'] = homo_image_path
+                    self.logger.info(f"HOMO 图片生成: {homo_image_path}")
+
+                    # 读取图片并转换为base64（用于混合云架构）
+                    try:
+                        with open(homo_image_path, 'rb') as f:
+                            homo_image_data = f.read()
+                            result['homo_image_content'] = base64.b64encode(homo_image_data).decode('utf-8')
+                            self.logger.info(f"HOMO 图片已编码为base64，大小: {len(homo_image_data)} bytes")
+                    except Exception as e:
+                        self.logger.warning(f"读取HOMO图片失败: {e}")
+            except Exception as e:
+                self.logger.warning(f"HOMO 可视化生成失败: {e}")
+
+            # 3. 生成 LUMO 轨道图片
+            try:
+                lumo_image_path = generate_orbital_visualization(work_dir, str(fchk_file), "LUMO")
+                if lumo_image_path:
+                    result['lumo_image_path'] = lumo_image_path
+                    self.logger.info(f"LUMO 图片生成: {lumo_image_path}")
+
+                    # 读取图片并转换为base64（用于混合云架构）
+                    try:
+                        with open(lumo_image_path, 'rb') as f:
+                            lumo_image_data = f.read()
+                            result['lumo_image_content'] = base64.b64encode(lumo_image_data).decode('utf-8')
+                            self.logger.info(f"LUMO 图片已编码为base64，大小: {len(lumo_image_data)} bytes")
+                    except Exception as e:
+                        self.logger.warning(f"读取LUMO图片失败: {e}")
+            except Exception as e:
+                self.logger.warning(f"LUMO 可视化生成失败: {e}")
+
+            return result if result else None
+
+        except ImportError as e:
+            self.logger.warning(f"无法导入 qc_postprocess 模块: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"生成 QC 可视化失败: {e}", exc_info=True)
+            return None
+
+    def _upload_qc_result(self, job_id: int, result: Dict[str, Any]):
+        """上传 QC 计算结果到后端 API"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/qc_result"
+
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                json=result,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                self.logger.info(f"✅ QC 结果上传成功: job_id={job_id}, result_id={data.get('result_id')}")
+            else:
+                error_msg = f"QC 结果上传失败: HTTP {response.status_code} - {response.text}"
+                self.logger.error(f"❌ {error_msg}")
+                # 更新任务状态为失败，并记录详细错误信息
+                self._update_job_status(
+                    job_id, 'FAILED', 'qc',
+                    error_message=f"结果上传失败: {error_msg}"
+                )
+                raise Exception(error_msg)
+
+        except requests.exceptions.RequestException as e:
+            error_msg = f"网络错误，无法上传QC结果: {str(e)}"
+            self.logger.error(f"❌ {error_msg}", exc_info=True)
+            # 更新任务状态为失败
+            self._update_job_status(
+                job_id, 'FAILED', 'qc',
+                error_message=error_msg
+            )
+            raise
+        except Exception as e:
+            error_msg = f"上传 QC 结果时发生异常: {str(e)}"
+            self.logger.error(f"❌ {error_msg}", exc_info=True)
+            # 更新任务状态为失败
+            self._update_job_status(
+                job_id, 'FAILED', 'qc',
+                error_message=error_msg
+            )
+            raise
+
+    def _parse_md_results(self, work_dir: Path, job_id: int = None) -> Optional[Dict[str, Any]]:
+        """
+        解析 MD 任务的结果数据（RDF、MSD 等）
+
+        使用后端的 LAMMPS 读取器来正确解析数据，确保：
+        1. RDF 标签正确映射到分子/原子名称
+        2. MSD 文件正确解析（out_*_msd.dat 格式）
+
+        Args:
+            work_dir: 工作目录
+            job_id: 任务ID，用于获取任务配置中的温度
+        """
+        import sys
+
+        results = {
+            'rdf_results': [],
+            'msd_results': [],
+        }
+
+        # 获取任务配置中的温度（用于扩散系数和电导率计算）
+        temperature = 298.15  # 默认室温
+        if job_id:
+            try:
+                # 从API获取任务配置
+                endpoint = f"{self.api_base_url}/workers/jobs/{job_id}"
+                response = requests.get(
+                    endpoint,
+                    headers=self.api_headers,
+                    timeout=self.config['api']['timeout']
+                )
+                if response.status_code == 200:
+                    job_data = response.json()
+                    config = job_data.get('config', {})
+                    # 优先使用 temperature_nvt，其次 temperature，最后默认 298.15K
+                    temperature = config.get('temperature_nvt', config.get('temperature', 298.15))
+                    self.logger.info(f"从任务配置中读取温度: {temperature} K")
+                else:
+                    self.logger.warning(f"无法获取任务配置，使用默认温度 {temperature} K")
+            except Exception as e:
+                self.logger.warning(f"获取任务配置失败: {e}，使用默认温度 {temperature} K")
+
+        try:
+            # 添加后端模块路径
+            backend_path = Path(__file__).parent.parent / "backend"
+            if str(backend_path) not in sys.path:
+                sys.path.insert(0, str(backend_path))
+
+            # 1. 解析 RDF 数据（使用后端的 LAMMPSRDFReader）
+            try:
+                from app.workers.lammps_rdf_reader import LAMMPSRDFReader
+
+                reader = LAMMPSRDFReader(work_dir)
+                rdf_data = reader.read_rdf_file()
+
+                if rdf_data:
+                    for data in rdf_data:
+                        # 转换为 API 上传格式
+                        rdf_item = {
+                            'center_species': data['center_label'],
+                            'shell_species': data['target_label'],
+                            'r_values': data['r'],
+                            'g_r_values': data['g_r'],
+                            'coordination_number_values': data.get('coordination_number'),
+                        }
+                        # 计算第一峰信息
+                        first_peak_pos, first_peak_height = self._find_first_peak(data['r'], data['g_r'])
+                        rdf_item['first_peak_position'] = first_peak_pos
+                        rdf_item['first_peak_height'] = first_peak_height
+                        if data.get('coordination_number'):
+                            rdf_item['coordination_number'] = data['coordination_number'][-1]
+
+                        results['rdf_results'].append(rdf_item)
+
+                    self.logger.info(f"解析到 {len(results['rdf_results'])} 个 RDF 数据对")
+            except ImportError as e:
+                self.logger.warning(f"无法导入 LAMMPSRDFReader，使用简化解析: {e}")
+                # 降级到简化解析
+                rdf_file = work_dir / "out_rdf.dat"
+                if rdf_file.exists():
+                    rdf_data = self._parse_lammps_rdf_simple(rdf_file, work_dir)
+                    if rdf_data:
+                        results['rdf_results'] = rdf_data
+                        self.logger.info(f"解析到 {len(rdf_data)} 个 RDF 数据对（简化模式）")
+
+            # 2. 解析 MSD 数据（使用后端的完整计算逻辑）
+            try:
+                from app.workers.lammps_msd_reader import (
+                    LAMMPSMSDReader,
+                    calculate_diffusion_coefficient,
+                    calculate_ionic_conductivity,
+                    calculate_mobility,
+                )
+                from app.tasks.msd_processor import extract_box_volume_and_ion_counts, get_ion_charge
+
+                msd_reader = LAMMPSMSDReader(work_dir)
+                msd_files = msd_reader.find_msd_files()
+
+                # 提取盒子体积和离子数量（用于电导率计算）
+                box_volume, ion_counts = extract_box_volume_and_ion_counts(work_dir)
+                self.logger.info(f"Box volume: {box_volume}, Ion counts: {ion_counts}")
+
+                # temperature 已在函数开头从任务配置中读取
+
+                for msd_file in msd_files:
+                    msd_data = msd_reader.read_msd_file(msd_file)
+                    if msd_data:
+                        species = msd_data['species']
+                        time_arr = msd_data['time']
+                        msd_total = msd_data['msd_total']
+
+                        # 计算扩散系数
+                        diffusion_coeff = calculate_diffusion_coefficient(time_arr, msd_total)
+
+                        # 获取离子电荷
+                        charge = get_ion_charge(species)
+
+                        # 计算迁移率
+                        mobility = calculate_mobility(diffusion_coeff, charge, temperature)
+
+                        # 计算电导率（需要盒子体积和离子数量）
+                        ionic_conductivity = None
+                        if box_volume and ion_counts and diffusion_coeff:
+                            ion_count = ion_counts.get(species, 0)
+                            # 模糊匹配
+                            if ion_count == 0:
+                                for key, val in ion_counts.items():
+                                    if key in species or species in key:
+                                        ion_count = val
+                                        break
+
+                            if ion_count > 0:
+                                ionic_conductivity = calculate_ionic_conductivity(
+                                    diffusion_coeff, ion_count, box_volume, charge, temperature
+                                )
+
+                        # 转换为 API 上传格式
+                        msd_item = {
+                            'species': species,
+                            't_values': time_arr,
+                            'msd_x_values': msd_data.get('msd_x'),
+                            'msd_y_values': msd_data.get('msd_y'),
+                            'msd_z_values': msd_data.get('msd_z'),
+                            'msd_total_values': msd_total,
+                            'diffusion_coefficient': diffusion_coeff,
+                            'mobility': mobility,
+                            'ionic_conductivity': ionic_conductivity,
+                            'charge': charge,
+                            'labels': msd_data.get('labels'),
+                        }
+                        results['msd_results'].append(msd_item)
+                        self.logger.info(f"MSD {species}: D={diffusion_coeff}, μ={mobility}, σ={ionic_conductivity}")
+
+                if results['msd_results']:
+                    self.logger.info(f"解析到 {len(results['msd_results'])} 个 MSD 数据（完整计算）")
+            except ImportError as e:
+                self.logger.warning(f"无法导入后端 MSD 模块，使用简化解析: {e}")
+                # 降级到简化解析 - 正确的文件名模式
+                msd_files = list(work_dir.glob("out_*_msd.dat"))
+
+                # 尝试提取盒子体积和离子数量（用于电导率计算）
+                box_volume = None
+                ion_counts = None
+                try:
+                    from app.tasks.msd_processor import extract_box_volume_and_ion_counts
+                    box_volume, ion_counts = extract_box_volume_and_ion_counts(work_dir)
+                    self.logger.info(f"提取到 box_volume={box_volume}, ion_counts={ion_counts}")
+                except Exception as e:
+                    self.logger.warning(f"无法提取 box_volume 和 ion_counts: {e}")
+
+                for msd_file in msd_files:
+                    msd_data = self._parse_lammps_msd_simple(msd_file, box_volume, ion_counts, temperature)
+                    if msd_data:
+                        results['msd_results'].append(msd_data)
+
+                if results['msd_results']:
+                    self.logger.info(f"解析到 {len(results['msd_results'])} 个 MSD 数据（简化模式）")
+
+            # 3. 解析日志文件获取能量、密度等
+            log_file = work_dir / "log.lammps"
+            if log_file.exists():
+                summary = self._parse_lammps_log(log_file)
+                results.update(summary)
+
+            # 4. 分析溶剂化结构（使用后端的 solvation 服务）
+            electrolyte_data = self._load_electrolyte_config(work_dir)
+
+            try:
+                from app.services.solvation import analyze_solvation_structures
+
+                if electrolyte_data:
+                    self.logger.info(f"开始溶剂化结构分析: {work_dir}")
+                    solvation_results = analyze_solvation_structures(
+                        work_dir=str(work_dir),
+                        electrolyte_data=electrolyte_data,
+                        cutoff=3.0,  # 默认截断距离
+                    )
+
+                    if solvation_results:
+                        # 读取 XYZ 文件内容
+                        for solv in solvation_results:
+                            if solv.get('file_path'):
+                                try:
+                                    with open(solv['file_path'], 'r') as f:
+                                        solv['xyz_content'] = f.read()
+                                except Exception as e:
+                                    self.logger.warning(f"读取溶剂化 XYZ 失败: {e}")
+
+                        results['solvation_structures'] = solvation_results
+                        self.logger.info(f"溶剂化结构分析完成: {len(solvation_results)} 个结构")
+                else:
+                    self.logger.warning("未找到电解液配置，跳过溶剂化分析")
+            except ImportError as e:
+                self.logger.warning(f"无法导入溶剂化分析模块: {e}")
+            except Exception as e:
+                self.logger.warning(f"溶剂化分析失败: {e}")
+
+            # 5. 提取系统结构（混合方案：优先从dump文件，降级到后端服务）
+            try:
+                system_xyz = self._extract_system_structure_from_dump(work_dir)
+                if system_xyz:
+                    results['system_xyz_content'] = system_xyz
+                    self.logger.info(f"从dump文件提取系统结构成功")
+                else:
+                    # 降级：尝试使用后端的 get_system_structure
+                    try:
+                        from app.services.solvation import get_system_structure
+
+                        system_result = get_system_structure(str(work_dir), frame_idx=-1)
+                        if system_result and 'xyz_content' in system_result:
+                            results['system_xyz_content'] = system_result['xyz_content']
+                            # 保存系统结构的详细信息（用于 SystemStructure 表）
+                            results['system_frame_index'] = system_result.get('frame_index', 0)
+                            results['system_total_frames'] = system_result.get('total_frames', 1)
+                            results['system_atom_count'] = system_result.get('atom_count', 0)
+                            results['system_box'] = system_result.get('box', [0, 0, 0])
+
+                            # 从系统结构获取盒子尺寸（如果日志解析没有）
+                            if 'box' in system_result and system_result['box']:
+                                box = system_result['box']
+                                if not results.get('box_x') and len(box) >= 3:
+                                    results['box_x'] = box[0]
+                                    results['box_y'] = box[1]
+                                    results['box_z'] = box[2]
+                            self.logger.info(f"从后端服务提取系统结构成功: {system_result.get('atom_count', 0)} 原子, 帧 {system_result.get('frame_index', 0)}/{system_result.get('total_frames', 1)}")
+                        else:
+                            self.logger.warning(f"后端服务返回错误: {system_result.get('error', 'Unknown error')}")
+                    except ImportError as e:
+                        self.logger.warning(f"无法导入 get_system_structure: {e}")
+                    except Exception as e:
+                        self.logger.warning(f"后端服务提取系统结构失败: {e}")
+            except Exception as e:
+                self.logger.warning(f"提取系统结构失败: {e}")
+
+            # 6. 提取分子结构（PDB 和电荷信息）
+            try:
+                molecule_structures = self._extract_molecule_structures(work_dir)
+                if molecule_structures:
+                    results['molecule_structures'] = molecule_structures
+                    self.logger.info(f"分子结构提取完成: {len(molecule_structures)} 个分子")
+            except Exception as e:
+                self.logger.warning(f"提取分子结构失败: {e}")
+
+            # 7. 计算浓度（如果有盒子尺寸和电解液配置）
+            if electrolyte_data and results.get('box_x'):
+                try:
+                    conc_data = self._calculate_concentration(results, electrolyte_data)
+                    results.update(conc_data)
+                except Exception as e:
+                    self.logger.warning(f"计算浓度失败: {e}")
+
+            return results if (results['rdf_results'] or results['msd_results'] or results.get('solvation_structures') or results.get('system_xyz_content') or results.get('molecule_structures')) else None
+
+        except Exception as e:
+            self.logger.error(f"解析 MD 结果失败: {e}", exc_info=True)
+            return None
+
+    def _load_electrolyte_config(self, work_dir: Path) -> Optional[Dict[str, Any]]:
+        """
+        加载电解液配置
+
+        优先级：
+        1. electrolyte.json（如果存在）
+        2. job_config.json 中的 electrolyte 字段（如果存在）
+        3. 从 atom_mapping.json 构建（使用 initial_salts 中的阴离子列表）
+        """
+        import json
+
+        # 尝试从 electrolyte.json 加载
+        electrolyte_file = work_dir / "electrolyte.json"
+        if electrolyte_file.exists():
+            try:
+                with open(electrolyte_file) as f:
+                    return json.load(f)
+            except Exception as e:
+                self.logger.warning(f"读取 electrolyte.json 失败: {e}")
+
+        # 尝试从 job_config.json 加载
+        config_file = work_dir / "job_config.json"
+        if config_file.exists():
+            try:
+                with open(config_file) as f:
+                    config = json.load(f)
+                    if 'electrolyte' in config:
+                        return config['electrolyte']
+            except Exception as e:
+                self.logger.warning(f"读取 job_config.json 失败: {e}")
+
+        # 尝试从 atom_mapping.json 构建基本配置
+        atom_mapping_file = work_dir / "atom_mapping.json"
+        if atom_mapping_file.exists():
+            try:
+                with open(atom_mapping_file) as f:
+                    atom_mapping = json.load(f)
+
+                # 从 atom_mapping 提取分子信息
+                molecules = atom_mapping.get('molecules', [])
+                if molecules:
+                    # 统计各类型分子
+                    from collections import Counter
+                    mol_names = [m.get('molecule_name', '') for m in molecules]
+                    mol_counts = Counter(mol_names)
+
+                    # 获取 initial_salts 中的阴离子列表（动态）
+                    anions = self._get_available_anions()
+
+                    # 常见阳离子列表
+                    cations = ['Li', 'Na', 'K', 'Mg', 'Ca', 'Zn', 'Cs', 'Rb']
+
+                    electrolyte_config = {
+                        'cations': [],
+                        'anions': [],
+                        'solvents': [],
+                    }
+
+                    for mol_name, count in mol_counts.items():
+                        if any(c in mol_name for c in cations):
+                            electrolyte_config['cations'].append({
+                                'name': mol_name, 'count': count
+                            })
+                        elif mol_name in anions:  # 精确匹配阴离子
+                            electrolyte_config['anions'].append({
+                                'name': mol_name, 'count': count
+                            })
+                        else:
+                            electrolyte_config['solvents'].append({
+                                'name': mol_name, 'count': count
+                            })
+
+                    if electrolyte_config['cations']:
+                        self.logger.info(
+                            f"从 atom_mapping 构建电解液配置: "
+                            f"阳离子={[c['name'] for c in electrolyte_config['cations']]}, "
+                            f"阴离子={[a['name'] for a in electrolyte_config['anions']]}, "
+                            f"溶剂={[s['name'] for s in electrolyte_config['solvents']]}"
+                        )
+                        return electrolyte_config
+            except Exception as e:
+                self.logger.warning(f"从 atom_mapping 构建配置失败: {e}")
+
+        return None
+
+    def _get_available_anions(self) -> set:
+        """
+        从 initial_salts 目录中获取所有可用的阴离子列表
+
+        通过扫描 .lt 文件中的 charge 字段来识别阴离子（负电荷）
+
+        Returns:
+            阴离子名称的集合，例如 {'PF6', 'FSI', 'TFSI', ...}
+        """
+        from pathlib import Path
+
+        anions = set()
+
+        # 尝试从校园网和腾讯云两个位置查找 initial_salts
+        salts_dirs = [
+            Path("/public/home/xiaoji/molyte_web/data/initial_salts"),
+            Path("/opt/molyte_web_v1.0/data/initial_salts"),
+        ]
+
+        for salts_dir in salts_dirs:
+            if not salts_dir.exists():
+                continue
+
+            try:
+                # 扫描所有 .lt 文件
+                for lt_file in salts_dir.glob("*.lt"):
+                    if lt_file.stem in ['job', 'system']:
+                        continue
+
+                    # 尝试从 .lt 文件中解析电荷
+                    try:
+                        with open(lt_file, 'r') as f:
+                            content = f.read()
+                            # 查找 charge 字段，识别负电荷（阴离子）
+                            is_anion = False
+                            for line in content.split('\n'):
+                                if 'charge' in line.lower():
+                                    # 检查是否为负数
+                                    # 例如：charge = -1.0 或 charge -1
+                                    if '-' in line and any(c.isdigit() for c in line):
+                                        is_anion = True
+                                        break
+
+                            if is_anion:
+                                anions.add(lt_file.stem)
+
+                    except Exception as e:
+                        self.logger.debug(f"解析 {lt_file.name} 失败: {e}")
+
+                if anions:
+                    self.logger.info(f"从 {salts_dir} 扫描到 {len(anions)} 个阴离子: {sorted(anions)}")
+                    return anions
+
+            except Exception as e:
+                self.logger.debug(f"扫描 {salts_dir} 失败: {e}")
+
+        # 如果无法从文件系统获取，使用硬编码的备用列表
+        fallback_anions = {
+            'FSI', 'TFSI', 'PF6', 'BF4', 'ClO4', 'DCA', 'Cl', 'Br', 'I',
+            'NO3', 'SO4', 'OAc', 'acetate', 'Otf', 'FBS-', 'NFBS', 'DFBOP', 'DFOB',
+            'OAc-ion_opls_resp2'  # 包含带后缀的版本
+        }
+        self.logger.warning(
+            f"无法从 initial_salts 获取阴离子列表，使用备用列表 ({len(fallback_anions)} 个): {sorted(fallback_anions)}"
+        )
+        return fallback_anions
+
+    def _calculate_concentration(self, results: Dict, electrolyte_data: Dict) -> Dict[str, float]:
+        """根据盒子尺寸计算浓度"""
+        conc_result = {}
+        AVOGADRO = 6.022e23
+
+        try:
+            # 计算阳离子数量
+            cation_count = 0
+            for cat in electrolyte_data.get('cations', []):
+                cation_count += cat.get('count', cat.get('number', 0))
+
+            if cation_count == 0:
+                return conc_result
+
+            # 计算最终浓度
+            if results.get('box_x') and results.get('box_y') and results.get('box_z'):
+                volume_L = (results['box_x'] * results['box_y'] * results['box_z']) * 1e-27
+                if volume_L > 0:
+                    conc_result['concentration'] = round((cation_count / AVOGADRO) / volume_L, 4)
+
+            # 计算初始浓度
+            if results.get('initial_box_x') and results.get('initial_box_y') and results.get('initial_box_z'):
+                init_volume_L = (results['initial_box_x'] * results['initial_box_y'] * results['initial_box_z']) * 1e-27
+                if init_volume_L > 0:
+                    conc_result['initial_concentration'] = round((cation_count / AVOGADRO) / init_volume_L, 4)
+
+        except Exception as e:
+            self.logger.warning(f"浓度计算失败: {e}")
+
+        return conc_result
+
+    def _extract_molecule_structures(self, work_dir: Path) -> List[Dict[str, Any]]:
+        """
+        从工作目录提取分子结构信息（PDB 内容和电荷）
+        这是后端 get_molecule_templates API 的逻辑移植到 Worker
+        """
+        import json
+        import re
+
+        molecules = []
+        seen_molecules = set()
+
+        try:
+            # 获取任务名称（用于过滤系统级别的 .lt 文件）
+            job_name = work_dir.name
+
+            # 首先找到所有 .lt 文件（这些是实际使用的分子）
+            lt_files = list(work_dir.glob("*.lt"))
+
+            for lt_file in lt_files:
+                base_name = lt_file.stem
+
+                # 跳过系统级别的 .lt 文件
+                if base_name == job_name or len(base_name) > 50:
+                    continue
+
+                if base_name in seen_molecules:
+                    continue
+                seen_molecules.add(base_name)
+
+                # 查找对应的 PDB 文件
+                pdb_file = None
+                pdb_candidates = [
+                    work_dir / f"{base_name}.charmm.pdb",
+                    work_dir / f"{base_name}.q.pdb",
+                    work_dir / f"{base_name}.pdb",
+                ]
+
+                for candidate in pdb_candidates:
+                    if candidate.exists():
+                        pdb_file = candidate
+                        break
+
+                if not pdb_file:
+                    continue
+
+                # 读取 PDB 内容
+                try:
+                    pdb_content = pdb_file.read_text(encoding='utf-8')
+                except UnicodeDecodeError:
+                    pdb_content = pdb_file.read_text(encoding='latin-1')
+
+                # 解析原子
+                atoms = []
+                for line in pdb_content.split('\n'):
+                    if line.startswith('ATOM') or line.startswith('HETATM'):
+                        try:
+                            atom_id = int(line[6:11].strip())
+                            atom_name = line[12:16].strip()
+                            x = float(line[30:38].strip())
+                            y = float(line[38:46].strip())
+                            z = float(line[46:54].strip())
+                            element = line[76:78].strip() if len(line) > 76 else atom_name[0]
+
+                            atoms.append({
+                                "id": atom_id,
+                                "name": atom_name,
+                                "element": element,
+                                "x": x,
+                                "y": y,
+                                "z": z,
+                                "charge": None
+                            })
+                        except (ValueError, IndexError):
+                            continue
+
+                # 从 .lt 文件读取电荷
+                lt_content = lt_file.read_text()
+                charge_map = {}
+
+                # 方法1: 从 "In Charges" 部分解析
+                charges_section = re.search(r'write_once\("In Charges"\)\s*\{(.*?)\}', lt_content, re.DOTALL)
+                if charges_section:
+                    for line in charges_section.group(1).split('\n'):
+                        match = re.search(r'set type @atom:(\w+)\s+charge\s+([-\d.]+)', line)
+                        if match:
+                            charge_map[match.group(1)] = float(match.group(2))
+
+                # 方法2: 从 "Data Atoms" 部分解析
+                atoms_section = re.search(r'write\("Data Atoms"\)\s*\{(.*?)\}', lt_content, re.DOTALL)
+                if atoms_section:
+                    atom_lines = []
+                    for line in atoms_section.group(1).split('\n'):
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            match = re.search(
+                                r'\$atom:(\w+)\s+\$mol[:\w]*\s+@atom:(\w+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)',
+                                line
+                            )
+                            if match:
+                                atom_lines.append({
+                                    'charge': float(match.group(3)),
+                                    'x': float(match.group(4)),
+                                    'y': float(match.group(5)),
+                                    'z': float(match.group(6))
+                                })
+
+                    # 按坐标或顺序匹配电荷
+                    for i, lt_atom in enumerate(atom_lines):
+                        matched = False
+                        for pdb_atom in atoms:
+                            if (abs(pdb_atom['x'] - lt_atom['x']) < 0.01 and
+                                abs(pdb_atom['y'] - lt_atom['y']) < 0.01 and
+                                abs(pdb_atom['z'] - lt_atom['z']) < 0.01):
+                                pdb_atom['charge'] = lt_atom['charge']
+                                matched = True
+                                break
+
+                        if not matched and i < len(atoms):
+                            atoms[i]['charge'] = lt_atom['charge']
+
+                # 应用 charge_map
+                for atom in atoms:
+                    if atom['charge'] is None and atom['element'] in charge_map:
+                        atom['charge'] = charge_map[atom['element']]
+
+                # 确定分子类型
+                total_charge = sum(a['charge'] for a in atoms if a['charge'] is not None)
+
+                if total_charge > 0.5:
+                    mol_type = "cation"
+                elif total_charge < -0.5:
+                    mol_type = "anion"
+                else:
+                    mol_type = "solvent"
+
+                molecules.append({
+                    "name": base_name,
+                    "type": mol_type,
+                    "pdb_content": pdb_content,
+                    "atoms": atoms,
+                    "total_charge": total_charge,
+                    "charge_method": "resp"
+                })
+
+            return molecules
+
+        except Exception as e:
+            self.logger.error(f"提取分子结构失败: {e}", exc_info=True)
+            return []
+
+    def _parse_lammps_rdf_simple(self, rdf_file: Path, work_dir: Path) -> List[Dict[str, Any]]:
+        """
+        简化版 RDF 解析（当无法导入后端模块时使用）
+        尝试从 atom_mapping.json 和 .in.list 获取标签
+        """
+        import json
+        import re
+
+        rdf_results = []
+
+        try:
+            # 尝试加载 atom_mapping.json 获取标签信息
+            atom_mapping_file = work_dir / "atom_mapping.json"
+            type_to_label = {}
+
+            if atom_mapping_file.exists():
+                with open(atom_mapping_file) as f:
+                    atom_mapping = json.load(f)
+
+                # 从 atom_types 提取标签
+                if 'atom_types' in atom_mapping:
+                    for at in atom_mapping['atom_types']:
+                        type_id = at.get('type_id')
+                        label = at.get('label') or at.get('element', f'Type{type_id}')
+                        mol_name = at.get('molecule_name', '')
+                        if mol_name:
+                            type_to_label[type_id] = f"{mol_name}_{label}"
+                        else:
+                            type_to_label[type_id] = label
+
+            # 尝试从 .in.list 获取 RDF 对
+            in_list_file = work_dir / f"{work_dir.name}.in.list"
+            rdf_pairs = []
+
+            if in_list_file.exists():
+                content = in_list_file.read_text()
+                # 解析 compute rdf 命令
+                # 格式: compute rdf_compute all rdf 100 1 2 1 3 2 3 ...
+                for line in content.split('\n'):
+                    if 'compute' in line and 'rdf' in line:
+                        parts = line.split()
+                        # 找到数字对
+                        numbers = []
+                        for p in parts:
+                            try:
+                                numbers.append(int(p))
+                            except ValueError:
+                                continue
+                        # 第一个数字是 bins，后面是原子类型对
+                        if len(numbers) > 1:
+                            for i in range(1, len(numbers) - 1, 2):
+                                type1, type2 = numbers[i], numbers[i + 1]
+                                label1 = type_to_label.get(type1, f"Type{type1}")
+                                label2 = type_to_label.get(type2, f"Type{type2}")
+                                rdf_pairs.append((label1, label2))
+                        break
+
+            # 读取 RDF 数据
+            content = rdf_file.read_text()
+            lines = content.strip().split('\n')
+
+            # 找到数据块
+            data_blocks = []
+            current_block = []
+
+            for line in lines:
+                if line.startswith('#'):
+                    continue
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    try:
+                        row_num = int(parts[0])
+                        if row_num == 1 and current_block:
+                            data_blocks.append(current_block)
+                            current_block = []
+                        current_block.append([float(x) for x in parts[1:]])
+                    except ValueError:
+                        continue
+
+            if current_block:
+                data_blocks.append(current_block)
+
+            if not data_blocks:
+                return []
+
+            # 使用最后一个数据块
+            last_block = data_blocks[-1]
+            num_pairs = len(rdf_pairs) if rdf_pairs else (len(last_block[0]) // 2)
+
+            for i in range(num_pairs):
+                r_col = i * 2
+                g_col = i * 2 + 1
+
+                if g_col >= len(last_block[0]):
+                    break
+
+                r_values = [row[r_col] for row in last_block if len(row) > g_col]
+                g_r_values = [row[g_col] for row in last_block if len(row) > g_col]
+
+                # 获取标签
+                if i < len(rdf_pairs):
+                    center, shell = rdf_pairs[i]
+                else:
+                    center = f"Type{i*2+1}"
+                    shell = f"Type{i*2+2}"
+
+                # 计算配位数和第一峰
+                coord_numbers = self._calculate_coordination_number(r_values, g_r_values)
+                first_peak_pos, first_peak_height = self._find_first_peak(r_values, g_r_values)
+
+                rdf_results.append({
+                    'center_species': center,
+                    'shell_species': shell,
+                    'r_values': r_values,
+                    'g_r_values': g_r_values,
+                    'coordination_number_values': coord_numbers,
+                    'first_peak_position': first_peak_pos,
+                    'first_peak_height': first_peak_height,
+                    'coordination_number': coord_numbers[-1] if coord_numbers else None,
+                })
+
+            return rdf_results
+
+        except Exception as e:
+            self.logger.error(f"简化解析 RDF 文件失败: {e}", exc_info=True)
+            return []
+
+    def _parse_lammps_msd_simple(self, msd_file: Path, box_volume: Optional[float] = None,
+                                  ion_counts: Optional[Dict[str, int]] = None,
+                                  temperature: float = 298.15) -> Optional[Dict[str, Any]]:
+        """
+        简化版 MSD 解析（当无法导入后端模块时使用）
+        文件名格式: out_Li_msd.dat, out_FSI_msd.dat 等
+
+        Args:
+            msd_file: MSD 文件路径
+            box_volume: 模拟盒子体积 (Å³)，用于计算电导率
+            ion_counts: 各离子数量，用于计算电导率
+            temperature: 模拟温度 (K)，用于计算迁移率和电导率
+        """
+        import re
+
+        try:
+            # 从文件名提取物种名称
+            match = re.search(r'out_(.+?)_msd\.dat', msd_file.name)
+            if not match:
+                return None
+            species = match.group(1)
+
+            content = msd_file.read_text()
+            lines = content.strip().split('\n')
+
+            if len(lines) < 3:
+                return None
+
+            # 第二行是图例
+            legend_line = lines[1].strip().split()
+            labels = {
+                'time': legend_line[0] if len(legend_line) > 0 else 'fs',
+                'x': legend_line[1] if len(legend_line) > 1 else f'{species}_x',
+                'y': legend_line[2] if len(legend_line) > 2 else f'{species}_y',
+                'z': legend_line[3] if len(legend_line) > 3 else f'{species}_z',
+                'total': legend_line[4] if len(legend_line) > 4 else f'{species}_total',
+            }
+
+            # 读取数据
+            t_values = []
+            msd_x = []
+            msd_y = []
+            msd_z = []
+            msd_total = []
+
+            for line in lines[2:]:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    try:
+                        t_values.append(float(parts[0]))
+                        msd_x.append(float(parts[1]))
+                        msd_y.append(float(parts[2]))
+                        msd_z.append(float(parts[3]))
+                        msd_total.append(float(parts[4]))
+                    except ValueError:
+                        continue
+
+            if not t_values:
+                return None
+
+            # 计算扩散系数
+            diffusion_coeff = None
+            if len(t_values) > 10:
+                mid = len(t_values) // 2
+                t_fit = t_values[mid:]
+                msd_fit = msd_total[mid:]
+
+                if len(t_fit) > 2:
+                    n = len(t_fit)
+                    sum_t = sum(t_fit)
+                    sum_msd = sum(msd_fit)
+                    sum_t_msd = sum(t * m for t, m in zip(t_fit, msd_fit))
+                    sum_t2 = sum(t * t for t in t_fit)
+
+                    denom = n * sum_t2 - sum_t * sum_t
+                    if abs(denom) > 1e-10:
+                        slope = (n * sum_t_msd - sum_t * sum_msd) / denom
+                        # 单位转换：Å²/fs -> cm²/s
+                        # 1 Å²/fs = 1e-1 cm²/s
+                        diffusion_coeff = slope / 6.0 * 1e-1  # Å²/fs -> cm²/s
+
+            # 计算离子电荷、迁移率、电导率
+            ion_charge = self._get_ion_charge(species)
+            mobility = None
+            ionic_conductivity = None
+
+            if diffusion_coeff and ion_charge:
+                # 物理常数
+                BOLTZMANN = 1.380649e-23  # J/K
+                ELEMENTARY_CHARGE = 1.602176634e-19  # C
+                # temperature 参数已从函数参数中传入
+
+                # 迁移率 μ = qD / kT (cm²/V·s)
+                # D 单位是 cm²/s，需要转换为 m²/s
+                D_m2s = diffusion_coeff * 1e-4
+                mu_m2Vs = abs(ion_charge) * ELEMENTARY_CHARGE * D_m2s / (BOLTZMANN * temperature)
+                # 转换为 cm²/(V·s)
+                mobility = mu_m2Vs * 1e4
+
+            # 计算电导率（需要盒子体积和离子数量）
+            ionic_conductivity = None
+            if box_volume and ion_counts and diffusion_coeff:
+                ion_count = ion_counts.get(species, 0)
+                # 模糊匹配
+                if ion_count == 0:
+                    for key, val in ion_counts.items():
+                        if key in species or species in key:
+                            ion_count = val
+                            break
+
+                if ion_count > 0:
+                    # 计算数密度 n (ions/cm³)
+                    n = ion_count / (box_volume * 1e-24)
+
+                    # 扩散系数单位转换: cm²/s -> m²/s
+                    D_m2s = diffusion_coeff * 1e-4
+
+                    # 计算电导率
+                    q = abs(ion_charge) * 1.602176634e-19
+                    sigma_Sm = n * 1e6 * q * q * D_m2s / (1.380649e-23 * 298.15)
+
+                    # 转换为 S/cm
+                    ionic_conductivity = sigma_Sm / 100
+
+            return {
+                'species': species,
+                't_values': t_values,
+                'msd_x_values': msd_x,
+                'msd_y_values': msd_y,
+                'msd_z_values': msd_z,
+                'msd_total_values': msd_total,
+                'diffusion_coefficient': diffusion_coeff,
+                'mobility': mobility,
+                'ionic_conductivity': ionic_conductivity,
+                'charge': ion_charge,
+                'labels': labels,
+            }
+
+        except Exception as e:
+            self.logger.error(f"简化解析 MSD 文件 {msd_file} 失败: {e}", exc_info=True)
+            return None
+
+    def _get_ion_charge(self, species: str) -> int:
+        """获取离子电荷"""
+        # 常见离子电荷表
+        ION_CHARGES = {
+            'Li': 1, 'Na': 1, 'K': 1, 'Mg': 2, 'Ca': 2, 'Zn': 2, 'Al': 3,
+            'FSI': -1, 'TFSI': -1, 'PF6': -1, 'BF4': -1, 'ClO4': -1, 'DCA': -1,
+            'Cl': -1, 'Br': -1, 'I': -1, 'F': -1,
+        }
+
+        for ion, charge in ION_CHARGES.items():
+            if ion in species:
+                return charge
+
+        # 默认返回 None（非离子）
+        return None
+
+    def _calculate_coordination_number(self, r: List[float], g_r: List[float]) -> List[float]:
+        """计算配位数（g(r) 的积分）"""
+        import math
+
+        coord_numbers = []
+        integral = 0.0
+
+        for i in range(1, len(r)):
+            dr = r[i] - r[i-1]
+            # 使用梯形法则
+            avg_g = (g_r[i] + g_r[i-1]) / 2
+            avg_r = (r[i] + r[i-1]) / 2
+            # N(r) = 4π ∫ r² g(r) ρ dr，这里假设 ρ=1
+            integral += 4 * math.pi * avg_r * avg_r * avg_g * dr
+            coord_numbers.append(integral)
+
+        return coord_numbers
+
+    def _find_first_peak(self, r: List[float], g_r: List[float]) -> tuple:
+        """查找 g(r) 的第一个峰"""
+        if len(r) < 3:
+            return None, None
+
+        # 找第一个峰（g(r) > 1 的第一个局部最大值）
+        for i in range(1, len(g_r) - 1):
+            if g_r[i] > g_r[i-1] and g_r[i] > g_r[i+1] and g_r[i] > 1.0:
+                return r[i], g_r[i]
+
+        return None, None
+
+    def _extract_system_structure_from_dump(self, work_dir: Path) -> Optional[str]:
+        """
+        从LAMMPS dump文件提取最后一帧的系统结构，转换为XYZ格式
+
+        这是一个轻量级的替代方案，不依赖轨迹文件的完整解析
+        """
+        try:
+            # 查找dump文件（支持多种格式）
+            dump_files = list(work_dir.glob("*.dump"))
+            if not dump_files:
+                # 尝试查找 lammpstrj 文件
+                dump_files = list(work_dir.glob("*after_nvt.lammpstrj"))
+            if not dump_files:
+                # 尝试查找其他轨迹文件
+                dump_files = list(work_dir.glob("*.lammpstrj"))
+            if not dump_files:
+                self.logger.debug(f"未找到dump/lammpstrj文件: {work_dir}")
+                return None
+
+            dump_file = dump_files[0]
+            self.logger.debug(f"从dump文件提取系统结构: {dump_file.name}")
+
+            # 加载atom_mapping以获取类型到元素的映射
+            type_to_element = self._load_atom_type_mapping(work_dir)
+
+            # 读取最后一帧
+            atoms = {}
+            current_frame = []
+            in_frame = False
+            atom_section = False
+
+            with open(dump_file, 'r') as f:
+                for line in f:
+                    if line.startswith('ITEM: TIMESTEP'):
+                        # 新的一帧开始，保存前一帧
+                        if current_frame and atom_section:
+                            atoms = self._parse_dump_frame(current_frame, type_to_element)
+                        current_frame = [line]
+                        in_frame = True
+                        atom_section = False
+                    elif in_frame:
+                        current_frame.append(line)
+                        if line.startswith('ITEM: ATOMS'):
+                            atom_section = True
+
+                # 处理最后一帧
+                if current_frame and atom_section:
+                    atoms = self._parse_dump_frame(current_frame, type_to_element)
+
+            if not atoms:
+                self.logger.warning("未找到有效的原子数据")
+                return None
+
+            # 转换为XYZ格式
+            xyz_lines = [str(len(atoms)), "System structure (final frame)"]
+            for atom_id in sorted(atoms.keys()):
+                atom = atoms[atom_id]
+                element = atom.get('element', 'C')
+                x = atom.get('x', 0.0)
+                y = atom.get('y', 0.0)
+                z = atom.get('z', 0.0)
+                xyz_lines.append(f"{element} {x:.4f} {y:.4f} {z:.4f}")
+
+            xyz_content = "\n".join(xyz_lines)
+            self.logger.info(f"系统结构XYZ生成成功: {len(atoms)} 原子")
+            return xyz_content
+
+        except Exception as e:
+            self.logger.warning(f"从dump文件提取系统结构失败: {e}")
+            return None
+
+    def _load_atom_type_mapping(self, work_dir: Path) -> Dict[int, str]:
+        """
+        从atom_mapping.json加载原子类型到元素的映射
+
+        Returns:
+            type_id -> element_symbol 的字典
+        """
+        type_to_element = {}
+
+        try:
+            atom_mapping_file = work_dir / "atom_mapping.json"
+            if atom_mapping_file.exists():
+                with open(atom_mapping_file) as f:
+                    atom_mapping = json.load(f)
+
+                # 从 atom_types 提取映射
+                if 'atom_types' in atom_mapping:
+                    for at in atom_mapping['atom_types']:
+                        type_id = at.get('type_id')
+                        element = at.get('element', 'C')
+                        if type_id is not None:
+                            type_to_element[type_id] = element
+
+                self.logger.debug(f"加载atom_mapping成功: {len(type_to_element)} 个类型")
+        except Exception as e:
+            self.logger.warning(f"加载atom_mapping失败: {e}")
+
+        return type_to_element
+
+    def _parse_dump_frame(self, frame_lines: List[str], type_to_element: Dict[int, str] = None) -> Dict[int, Dict[str, Any]]:
+        """
+        解析LAMMPS dump文件的单个帧
+
+        Args:
+            frame_lines: 帧的所有行
+            type_to_element: 原子类型到元素的映射字典
+
+        Returns:
+            原子字典，key为原子ID，value为原子信息（element, x, y, z）
+        """
+        if type_to_element is None:
+            type_to_element = {}
+
+        atoms = {}
+        atom_section = False
+        atom_format = None  # 'id type x y z' 或其他格式
+
+        for line in frame_lines:
+            if line.startswith('ITEM: ATOMS'):
+                atom_section = True
+                # 解析原子列格式
+                parts = line.split()
+                if len(parts) > 2:
+                    atom_format = parts[2:]  # ['id', 'type', 'x', 'y', 'z', ...]
+                continue
+
+            if atom_section and not line.startswith('ITEM:'):
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+
+                try:
+                    # 标准格式: id type x y z
+                    atom_id = int(parts[0])
+                    atom_type = int(parts[1])
+                    x = float(parts[2])
+                    y = float(parts[3])
+                    z = float(parts[4])
+
+                    # 从映射中获取元素，如果没有则使用默认推断
+                    if atom_type in type_to_element:
+                        element = type_to_element[atom_type]
+                    else:
+                        element = self._get_element_from_type(atom_type)
+
+                    atoms[atom_id] = {
+                        'element': element,
+                        'x': x,
+                        'y': y,
+                        'z': z,
+                        'type': atom_type,
+                    }
+                except (ValueError, IndexError):
+                    continue
+
+        return atoms
+
+    def _get_element_from_type(self, atom_type: int) -> str:
+        """
+        根据LAMMPS原子类型推断元素符号
+
+        这是一个简化版本，假设：
+        - 类型1-2: Li (锂)
+        - 类型3-4: F (氟)
+        - 类型5-6: S (硫)
+        - 类型7-8: C (碳)
+        - 类型9-10: O (氧)
+        - 类型11-12: H (氢)
+        - 其他: C (默认碳)
+        """
+        type_to_element = {
+            1: 'Li', 2: 'Li',
+            3: 'F', 4: 'F',
+            5: 'S', 6: 'S',
+            7: 'C', 8: 'C',
+            9: 'O', 10: 'O',
+            11: 'H', 12: 'H',
+        }
+        return type_to_element.get(atom_type, 'C')
+
+    def _parse_lammps_log(self, log_file: Path) -> Dict[str, Any]:
+        """从 LAMMPS 日志文件解析能量、温度、密度、盒子尺寸等
+
+        使用与后端API相同的解析逻辑，确保准确提取初始和最终状态
+        """
+        result = {}
+
+        try:
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+
+            # 辅助函数：从一行数据中提取密度和盒子尺寸
+            # LAMMPS thermo 输出格式: Step CPU CPULeft Temp Density Lx Ly Lz ...
+            # 列索引:                  0    1   2       3    4       5  6  7
+            def parse_thermo_line(parts):
+                density_val = None
+                box_vals = []
+                try:
+                    # 根据列位置提取密度（第5列，索引4）
+                    if len(parts) > 4:
+                        density_val = float(parts[4])
+
+                    # 根据列位置提取盒子尺寸（第6-8列，索引5-7）
+                    if len(parts) > 7:
+                        box_vals = [float(parts[5]), float(parts[6]), float(parts[7])]
+                except (ValueError, IndexError):
+                    # 如果按列位置提取失败，返回 None
+                    density_val = None
+                    box_vals = []
+
+                return density_val, box_vals
+
+            # 判断是否为有效数据行
+            skip_prefixes = ('Loop', 'Performance', 'MPI', 'Section',
+                             'Total', 'Pair', 'Bond', 'Kspace', 'Neigh',
+                             'Comm', 'Output', 'Modify', 'Other', 'Nlocal',
+                             'Nghost', 'Neighs', 'Ave', 'Neighbor', 'Dangerous',
+                             'System', 'PPPM', 'WARNING', 'G vector', 'grid',
+                             'stencil', 'estimated', 'using', '3d grid', '-',
+                             'Step', 'Per', 'run', 'thermo', 'fix', 'dump',
+                             'Memory', 'units', 'atom', 'pair', 'kspace',
+                             'Lattice', 'Created', 'Reading', 'Replicate')
+
+            def is_data_line(line_str):
+                line_str = line_str.strip()
+                if not line_str:
+                    return False
+                if line_str.startswith(skip_prefixes):
+                    return False
+                parts = line_str.split()
+                if len(parts) < 8:
+                    return False
+                try:
+                    int(parts[0])  # 第一列应该是时间步（整数）
+                    return True
+                except ValueError:
+                    return False
+
+            # 找到第一个 "Step" 表头行的位置（能量最小化阶段的开始，即真正的初始状态）
+            first_step_header_idx = -1
+            for i, line in enumerate(lines):
+                if line.strip().startswith('Step'):
+                    first_step_header_idx = i
+                    break  # 只找第一个
+
+            # 找到第一个 "Step" 表头之后的第一行数据（真正的初始状态）
+            first_data_line = None
+            if first_step_header_idx >= 0:
+                for line in lines[first_step_header_idx + 1:]:
+                    if is_data_line(line):
+                        first_data_line = line.strip().split()
+                        break
+
+            # 找到最后一行数据（最终状态）
+            last_data_line = None
+            for line in reversed(lines[-300:]):
+                if is_data_line(line):
+                    last_data_line = line.strip().split()
+                    break
+
+            # 解析初始状态
+            if first_data_line:
+                init_density, init_box = parse_thermo_line(first_data_line)
+                if init_density:
+                    result['initial_density'] = round(init_density, 4)
+                if len(init_box) >= 3:
+                    result['initial_box_x'] = round(init_box[0], 2)
+                    result['initial_box_y'] = round(init_box[1], 2)
+                    result['initial_box_z'] = round(init_box[2], 2)
+
+            # 解析最终状态
+            if last_data_line:
+                final_density, final_box = parse_thermo_line(last_data_line)
+                if final_density:
+                    result['final_density'] = round(final_density, 4)
+                if len(final_box) >= 3:
+                    result['box_x'] = round(final_box[0], 2)
+                    result['box_y'] = round(final_box[1], 2)
+                    result['box_z'] = round(final_box[2], 2)
+
+                # 提取能量和温度（从最后一行）
+                # LAMMPS thermo 输出格式: Step CPU CPULeft Temp Density Lx Ly Lz TotEng KinEng PotEng ...
+                # 列索引:                  0    1   2       3    4       5  6  7  8      9       10
+                if len(last_data_line) >= 11:
+                    try:
+                        result['final_temperature'] = float(last_data_line[3])   # Temp
+                        result['total_energy'] = float(last_data_line[8])        # TotEng
+                        result['kinetic_energy'] = float(last_data_line[9])      # KinEng
+                        result['potential_energy'] = float(last_data_line[10])   # PotEng
+                    except (ValueError, IndexError):
+                        pass
+
+            self.logger.info(
+                f"解析LAMMPS日志: "
+                f"初始密度={result.get('initial_density')}, "
+                f"最终密度={result.get('final_density')}, "
+                f"初始盒子={result.get('initial_box_x')}×{result.get('initial_box_y')}×{result.get('initial_box_z')}, "
+                f"最终盒子={result.get('box_x')}×{result.get('box_y')}×{result.get('box_z')}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"解析 LAMMPS 日志失败: {e}", exc_info=True)
+
+        return result
+
+    def _upload_md_results(self, job_id: int, results: Dict[str, Any]):
+        """上传 MD 结果到后端 API"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/md_results"
+
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                json=results,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                self.logger.info(
+                    f"MD 结果上传成功: job_id={job_id}, "
+                    f"RDF={data.get('uploaded', {}).get('rdf', 0)}, "
+                    f"MSD={data.get('uploaded', {}).get('msd', 0)}"
+                )
+            else:
+                self.logger.error(f"MD 结果上传失败: {response.status_code} - {response.text}")
+
+        except Exception as e:
+            self.logger.error(f"上传 MD 结果失败: {e}", exc_info=True)
+
+    def _extract_last_frame(self, work_dir: Path, job_id: int) -> Optional[Path]:
+        """从 LAMMPS 轨迹文件中提取最后一帧"""
+        try:
+            # 查找 dump 文件
+            dump_files = list(work_dir.glob("*.dump"))
+            if not dump_files:
+                self.logger.warning(f"未找到轨迹文件: {work_dir}")
+                return None
+
+            dump_file = dump_files[0]
+            self.logger.info(f"提取最后一帧: {dump_file.name}")
+
+            # 读取 dump 文件，找到最后一帧
+            last_frame_lines = []
+            current_frame = []
+            in_frame = False
+
+            with open(dump_file, 'r') as f:
+                for line in f:
+                    if line.startswith('ITEM: TIMESTEP'):
+                        # 新的一帧开始
+                        if current_frame:
+                            last_frame_lines = current_frame
+                        current_frame = [line]
+                        in_frame = True
+                    elif in_frame:
+                        current_frame.append(line)
+
+                # 最后一帧
+                if current_frame:
+                    last_frame_lines = current_frame
+
+            if not last_frame_lines:
+                self.logger.warning("未找到有效帧")
+                return None
+
+            # 保存为 PDB 格式（简化版）
+            output_file = work_dir / f"final_frame_{job_id}.pdb"
+
+            # 解析 LAMMPS dump 并转换为 PDB
+            atoms = []
+            atom_section = False
+            for line in last_frame_lines:
+                if line.startswith('ITEM: ATOMS'):
+                    atom_section = True
+                    continue
+                if atom_section and not line.startswith('ITEM:'):
+                    parts = line.split()
+                    if len(parts) >= 5:  # id type x y z
+                        atoms.append(parts)
+
+            # 写入 PDB 文件
+            with open(output_file, 'w') as f:
+                f.write("REMARK   Final frame extracted from LAMMPS trajectory\n")
+                f.write(f"REMARK   Job ID: {job_id}\n")
+                for i, atom in enumerate(atoms, 1):
+                    # PDB 格式: ATOM serial name resName chainID resSeq x y z occupancy tempFactor element
+                    atom_id = atom[0] if len(atom) > 0 else str(i)
+                    atom_type = atom[1] if len(atom) > 1 else "C"
+                    x = float(atom[2]) if len(atom) > 2 else 0.0
+                    y = float(atom[3]) if len(atom) > 3 else 0.0
+                    z = float(atom[4]) if len(atom) > 4 else 0.0
+
+                    f.write(f"ATOM  {i:5d}  {atom_type:3s} MOL A   1    "
+                           f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {atom_type:2s}\n")
+                f.write("END\n")
+
+            self.logger.info(f"最后一帧已保存: {output_file.name}")
+            return output_file
+
+        except Exception as e:
+            self.logger.error(f"提取最后一帧失败: {e}", exc_info=True)
+            return None
+
+    def _upload_results_to_oss(self, job_id: int, work_dir: Path, job_type: str = None) -> List[str]:
+        """上传结果文件到对象存储（COS 或 OSS）
+
+        Args:
+            job_id: 任务ID
+            work_dir: 工作目录
+            job_type: 任务类型（'md', 'qc', 'anion_generation'）
+        """
+        uploaded_files = []
+
+        try:
+            # 1. 处理轨迹文件：提取最后一帧
+            trajectory_config = self.config['upload'].get('trajectory_handling', {})
+            if trajectory_config.get('enabled', True):
+                if trajectory_config.get('extract_last_frame', True):
+                    last_frame_file = self._extract_last_frame(work_dir, job_id)
+                    if last_frame_file:
+                        # 将最后一帧添加到上传列表
+                        self.logger.info(f"将上传最后一帧: {last_frame_file.name}")
+
+            # 2. 获取需要上传的文件
+            essential_patterns = self.config['upload']['essential_files']
+            optional_patterns = self.config['upload'].get('optional_large_files', [])
+            excluded_patterns = self.config['upload'].get('excluded_files', [])
+
+            max_size = self.config['upload']['max_file_size'] * 1024 * 1024  # MB to bytes
+            compress_threshold = self.config['upload'].get('compress_threshold', 50) * 1024 * 1024
+
+            # 获取结果文件前缀（根据任务类型选择）
+            if self.storage_type == 'cos':
+                if job_type == 'md':
+                    result_prefix = self.config['cos'].get('md_result_prefix', 'MD_results/')
+                elif job_type == 'qc':
+                    result_prefix = self.config['cos'].get('qc_result_prefix', 'QC_results/')
+                elif job_type == 'anion_generation':
+                    result_prefix = self.config['cos'].get('anion_result_prefix', 'Anion_results/')
+                else:
+                    # 向后兼容：如果没有指定任务类型，使用旧的 result_prefix
+                    result_prefix = self.config['cos'].get('result_prefix', 'results/')
+            else:
+                result_prefix = self.config['oss']['result_prefix']
+
+            # 3. 上传必要文件
+            all_patterns = essential_patterns.copy()
+            if self.config['upload']['strategy'].get('upload_optional_on_demand', False):
+                # 如果配置了按需上传，这里不上传可选文件
+                pass
+            else:
+                all_patterns.extend(optional_patterns)
+
+            for pattern in all_patterns:
+                for file_path in work_dir.glob(pattern):
+                    if not file_path.is_file():
+                        continue
+
+                    # 检查是否在排除列表中
+                    excluded = False
+                    for exclude_pattern in excluded_patterns:
+                        if file_path.match(exclude_pattern):
+                            self.logger.info(f"跳过排除的文件: {file_path.name}")
+                            excluded = True
+                            break
+                    if excluded:
+                        continue
+
+                    # 检查文件大小
+                    file_size = file_path.stat().st_size
+                    if file_size > max_size:
+                        self.logger.warning(f"文件 {file_path.name} ({file_size/1024/1024:.1f}MB) 超过大小限制，跳过")
+                        continue
+
+                    # 构建对象存储 Key
+                    object_key = f"{result_prefix}{job_id}/{file_path.name}"
+
+                    self.logger.info(f"上传文件: {file_path.name} ({file_size/1024/1024:.1f}MB)")
+
+                    # 根据存储类型上传
+                    if self.storage_type == 'cos':
+                        # 腾讯云 COS
+                        with open(file_path, 'rb') as f:
+                            self.cos_client.put_object(
+                                Bucket=self.cos_bucket,
+                                Body=f,
+                                Key=object_key
+                            )
+                    else:
+                        # 阿里云 OSS
+                        self.oss_bucket.put_object_from_file(object_key, str(file_path))
+
+                    uploaded_files.append(object_key)
+                    self.logger.info(f"✅ 上传成功: {file_path.name}")
+
+            self.logger.info(f"共上传 {len(uploaded_files)} 个文件")
+            return uploaded_files
+
+        except Exception as e:
+            self.logger.error(f"上传结果文件失败: {e}", exc_info=True)
+            raise
+
+    def _upload_additional_files(self, job_id: int, file_paths: List[Path], job_type: str = None) -> List[str]:
+        """上传额外的文件（如生成的图片）到对象存储
+
+        Args:
+            job_id: 任务ID
+            file_paths: 文件路径列表
+            job_type: 任务类型（'md', 'qc', 'anion_generation'）
+        """
+        uploaded_files = []
+
+        try:
+            # 获取结果文件前缀（根据任务类型选择）
+            if self.storage_type == 'cos':
+                if job_type == 'md':
+                    result_prefix = self.config['cos'].get('md_result_prefix', 'MD_results/')
+                elif job_type == 'qc':
+                    result_prefix = self.config['cos'].get('qc_result_prefix', 'QC_results/')
+                elif job_type == 'anion_generation':
+                    result_prefix = self.config['cos'].get('anion_result_prefix', 'Anion_results/')
+                else:
+                    # 向后兼容：如果没有指定任务类型，使用旧的 result_prefix
+                    result_prefix = self.config['cos'].get('result_prefix', 'results/')
+            else:
+                result_prefix = self.config['oss']['result_prefix']
+
+            for file_path in file_paths:
+                if not file_path.exists():
+                    continue
+
+                file_size = file_path.stat().st_size
+
+                # 构建对象存储 Key
+                object_key = f"{result_prefix}{job_id}/{file_path.name}"
+
+                self.logger.info(f"上传额外文件: {file_path.name} ({file_size/1024/1024:.1f}MB)")
+
+                # 根据存储类型上传
+                if self.storage_type == 'cos':
+                    # 腾讯云 COS
+                    with open(file_path, 'rb') as f:
+                        self.cos_client.put_object(
+                            Bucket=self.cos_bucket,
+                            Body=f,
+                            Key=object_key
+                        )
+                else:
+                    # 阿里云 OSS
+                    self.oss_bucket.put_object_from_file(object_key, str(file_path))
+
+                uploaded_files.append(object_key)
+                self.logger.info(f"✅ 额外上传成功: {file_path.name}")
+
+            return uploaded_files
+
+        except Exception as e:
+            self.logger.error(f"上传额外文件失败: {e}", exc_info=True)
+            return []
+
+    def _map_local_to_cos_paths(self, job_id: int, local_files: List[Path], cos_keys: List[str]) -> Dict[str, str]:
+        """将本地图片文件映射到COS路径，用于数据库存储"""
+        result = {}
+
+        # 创建文件名到COS key的映射
+        filename_to_cos = {}
+        for cos_key in cos_keys:
+            filename = cos_key.split('/')[-1]  # 从 results/105/ESP.png 提取 ESP.png
+            filename_to_cos[filename] = cos_key
+
+        # 映射特定的图片类型
+        for local_file in local_files:
+            filename = local_file.name
+            cos_key = filename_to_cos.get(filename)
+
+            if cos_key:
+                if filename.upper().startswith('ESP'):
+                    result['esp_image_path'] = cos_key
+                elif filename.upper().startswith('HOMO'):
+                    result['homo_image_path'] = cos_key
+                elif filename.upper().startswith('LUMO'):
+                    result['lumo_image_path'] = cos_key
+
+        return result
+
+    def _update_job_status(
+        self,
+        job_id: int,
+        status: str,
+        job_type: str,
+        slurm_job_id: Optional[str] = None,
+        work_dir: Optional[str] = None,
+        error_message: Optional[str] = None,
+        result_files: Optional[List[str]] = None,
+        progress: Optional[float] = None,
+        cpu_hours: Optional[float] = None,
+        resp_cpu_hours: Optional[float] = None,
+        qc_job_ids: Optional[List[int]] = None,
+        result: Optional[Dict] = None,
+        max_retries: int = 3
+    ):
+        """更新任务状态到腾讯云后端，支持重试机制"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/status"
+
+            # 确保状态值有效（包括 Cluster Analysis 特有的状态）
+            valid_statuses = ["CREATED", "SUBMITTED", "QUEUED", "RUNNING", "POSTPROCESSING",
+                            "COMPLETED", "FAILED", "CANCELLED", "WAITING_QC", "CALCULATING"]
+            if status not in valid_statuses:
+                self.logger.error(f"无效的状态值: {status}，有效值: {valid_statuses}")
+                return
+
+            data = {
+                'status': status,
+                'job_type': job_type.upper(),
+                'worker_name': self.config['worker']['name']
+            }
+
+            if slurm_job_id:
+                data['slurm_job_id'] = slurm_job_id
+            if work_dir:
+                data['work_dir'] = work_dir
+            # 显式处理 error_message：如果传递了参数（包括 None），则添加到数据中
+            if error_message is not None:
+                # 截断错误消息，防止过长
+                data['error_message'] = str(error_message)[:500] if error_message else None
+            if result_files:
+                data['result_files'] = result_files
+            if progress is not None:
+                data['progress'] = progress
+            if cpu_hours is not None:
+                data['cpu_hours'] = cpu_hours
+            if resp_cpu_hours is not None:
+                data['resp_cpu_hours'] = resp_cpu_hours
+            if qc_job_ids is not None:
+                data['qc_job_ids'] = qc_job_ids
+            if result is not None:
+                data['result'] = result
+
+            # 带重试的 API 调用
+            for attempt in range(max_retries):
+                try:
+                    response = requests.put(
+                        endpoint,
+                        headers=self.api_headers,
+                        json=data,
+                        timeout=self.config['api']['timeout']
+                    )
+
+                    if response.status_code == 200:
+                        self.logger.info(f"✅ 任务 {job_id} 状态已更新为 {status} (Slurm: {slurm_job_id})")
+                        return
+                    elif response.status_code >= 500:
+                        # 服务器错误，可以重试
+                        if attempt < max_retries - 1:
+                            self.logger.warning(f"⚠️ 更新任务 {job_id} 状态失败 (尝试 {attempt + 1}/{max_retries}): {response.status_code}")
+                            import time
+                            time.sleep(2 ** attempt)  # 指数退避
+                            continue
+                        else:
+                            self.logger.error(f"❌ 更新任务 {job_id} 状态失败，已达最大重试次数: {response.status_code} - {response.text}")
+                            return
+                    else:
+                        # 客户端错误，不重试
+                        self.logger.error(f"❌ 更新任务 {job_id} 状态失败: {response.status_code} - {response.text}")
+                        return
+
+                except requests.Timeout:
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"⚠️ 更新任务 {job_id} 状态超时 (尝试 {attempt + 1}/{max_retries})")
+                        import time
+                        time.sleep(2 ** attempt)
+                        continue
+                    else:
+                        self.logger.error(f"❌ 更新任务 {job_id} 状态超时，已达最大重试次数")
+                        return
+
+        except Exception as e:
+            self.logger.error(f"❌ 更新任务 {job_id} 状态失败: {e}", exc_info=True)
+
+    def _process_cluster_analysis_job(self, job: Dict):
+        """
+        处理 Cluster 高级计算任务
+
+        注意：Cluster 任务本身不需要提交到 Slurm。
+        QC 子任务已经在后端 API 中创建并提交（SUBMITTED 状态）。
+        这个函数只是一个容错机制，用于处理后端创建失败的情况。
+
+        统一处理多种计算类型：
+        - BINDING_TOTAL: 总 Binding Energy
+        - BINDING_PAIRWISE: 分子-Li Binding
+        - DESOLVATION_STEPWISE: 逐级去溶剂化
+        - DESOLVATION_FULL: 完全去溶剂化
+        - REDOX: 氧化还原电位
+        - REORGANIZATION: Marcus 重组能
+        """
+        job_id = job['id']
+        config = job.get('config', {})
+        md_job_id = config.get('md_job_id')
+        qc_task_plan = config.get('qc_task_plan', {})
+
+        self.logger.info(f"处理 Cluster 高级计算任务 {job_id} (MD job: {md_job_id})")
+
+        try:
+            # 检查是否已经有 QC 任务被创建
+            planned_tasks = qc_task_plan.get('planned_qc_tasks', [])
+            new_tasks = [t for t in planned_tasks if t.get('status') == 'new']
+
+            if not new_tasks:
+                # 所有 QC 任务都已经被创建，直接转换为 WAITING_QC
+                self.logger.info(f"Cluster 任务 {job_id}: 所有 QC 任务已创建，转换为 WAITING_QC")
+                self._update_job_status(job_id, 'WAITING_QC', 'cluster_analysis', progress=10)
+                return
+
+            # 如果还有未创建的 QC 任务，说明后端创建失败，这里作为容错机制
+            self.logger.warning(f"Cluster 任务 {job_id}: 检测到 {len(new_tasks)} 个未创建的 QC 任务，"
+                              f"这可能表示后端创建失败，尝试创建...")
+
+            # 创建新的 QC 任务（容错机制）
+            created_qc_job_ids = []
+            for task in new_tasks:
+                try:
+                    qc_job_id = self._create_qc_job_for_cluster_analysis(
+                        job_id, md_job_id, task, config.get('qc_config', {})
+                    )
+                    if qc_job_id:
+                        created_qc_job_ids.append(qc_job_id)
+                except Exception as e:
+                    self.logger.error(f"创建 QC 任务失败: {e}")
+
+            # 更新状态为 WAITING_QC
+            self._update_job_status(
+                job_id, 'WAITING_QC', 'cluster_analysis',
+                progress=10,
+                qc_job_ids=created_qc_job_ids
+            )
+
+            self.logger.info(f"Cluster 任务 {job_id}: 容错创建了 {len(created_qc_job_ids)} 个 QC 任务")
+
+        except Exception as e:
+            self.logger.error(f"处理 Cluster 高级计算任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'cluster_analysis', error_message=str(e))
+
+    def _check_waiting_cluster_analysis_jobs(self):
+        """检查等待 QC 任务完成的 Cluster 高级计算任务"""
+        try:
+            # 获取 WAITING_QC 状态的任务
+            endpoint = f"{self.api_base_url}/workers/jobs/pending"
+            params = {
+                'job_type': 'CLUSTER_ANALYSIS',
+                'status_filter': 'WAITING_QC',  # 使用 status_filter 参数
+                'limit': 10
+            }
+
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                params=params,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code != 200:
+                self.logger.warning(f"获取 WAITING_QC 任务失败: HTTP {response.status_code}")
+                return
+
+            try:
+                waiting_jobs = response.json()
+            except Exception as e:
+                self.logger.error(f"解析 WAITING_QC 任务 JSON 失败: {e}, 响应内容: {response.text[:200]}")
+                return
+
+            self.logger.info(f"获取到 {len(waiting_jobs)} 个 WAITING_QC 状态的 Cluster 任务")
+
+            for job in waiting_jobs:
+                job_id = job['id']
+
+                # 首先检查是否有缺少的 QC 任务需要创建
+                missing_created = self._create_missing_cluster_qc_jobs(job)
+                if missing_created > 0:
+                    self.logger.info(f"Cluster 任务 {job_id}: 补充创建了 {missing_created} 个缺少的 QC 任务")
+
+                # 检查 QC 任务状态
+                qc_status = self._check_cluster_analysis_qc_status(job_id)
+
+                # 详细日志：记录 QC 任务状态
+                self.logger.debug(f"Cluster 任务 {job_id} QC 状态: {qc_status}")
+
+                if qc_status.get('all_completed'):
+                    self.logger.info(f"Cluster 任务 {job_id}: 所有 QC 任务已完成，开始计算结果")
+                    self._calculate_cluster_analysis_results(job)
+                elif qc_status.get('failed', 0) > 0:
+                    self.logger.error(f"Cluster 任务 {job_id}: 有 QC 任务失败")
+                    self._update_job_status(
+                        job_id, 'FAILED', 'cluster_analysis',
+                        error_message=f"{qc_status.get('failed')} 个 QC 任务失败"
+                    )
+                else:
+                    # 更新进度
+                    # 进度分配：
+                    # 10% - Cluster 任务创建和 QC 任务创建（已完成）
+                    # 10%-80% - QC 任务执行中（包括后处理）
+                    # 80%-100% - 结果计算
+                    total = qc_status.get('total_qc_jobs', 1)
+                    completed = qc_status.get('completed', 0)
+                    # 【关键修复】QC任务完成后会进入POSTPROCESSING状态，后处理还在进行中
+                    # 只统计真正COMPLETED的任务数，POSTPROCESSING状态的任务还在处理中
+                    qc_jobs = qc_status.get('qc_jobs', [])
+                    truly_completed = sum(
+                        1 for qc in qc_jobs
+                        if qc.get('status') == 'COMPLETED'
+                    )
+                    # 对于POSTPROCESSING状态的任务，按80%-90%的范围计算进度
+                    postprocessing = sum(
+                        1 for qc in qc_jobs
+                        if qc.get('status') == 'POSTPROCESSING'
+                    )
+                    # 进度 = 10% + (已完成/总数)*70% + (后处理中/总数)*10%
+                    progress = 10 + (truly_completed / total) * 70 + (postprocessing / total) * 10
+                    self._update_job_status(job_id, 'WAITING_QC', 'cluster_analysis', progress=progress)
+
+        except Exception as e:
+            self.logger.error(f"检查 WAITING_QC 任务失败: {e}", exc_info=True)
+
+    def _create_missing_cluster_qc_jobs(self, job: Dict) -> int:
+        """
+        检查并创建缺少的 QC 任务
+
+        当 Worker 在创建 QC 任务时中断（如网络错误、超时等），
+        可能只创建了部分任务。此方法检查计划任务和已创建任务的差异，
+        并补充创建缺少的任务。
+
+        Returns:
+            创建的任务数量
+        """
+        job_id = job['id']
+        md_job_id = job.get('md_job_id')
+        config = job.get('config', {})
+        qc_task_plan = job.get('qc_task_plan', {})
+
+        if not qc_task_plan:
+            return 0
+
+        planned_tasks = qc_task_plan.get('planned_qc_tasks', [])
+        if not planned_tasks:
+            return 0
+
+        try:
+            # 获取已创建的 QC 任务类型
+            endpoint = f"{self.api_base_url}/cluster-analysis/jobs/{job_id}/qc-jobs"
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code != 200:
+                self.logger.warning(f"获取 Cluster 任务 {job_id} 的 QC 任务列表失败: {response.status_code}")
+                return 0
+
+            existing_qc_jobs = response.json()
+            existing_types = set(qc.get('task_type') for qc in existing_qc_jobs if qc.get('task_type'))
+
+            # 找出缺少的任务
+            missing_tasks = [
+                t for t in planned_tasks
+                if t.get('status') == 'new' and t.get('task_type') not in existing_types
+            ]
+
+            if not missing_tasks:
+                return 0
+
+            self.logger.info(f"Cluster 任务 {job_id}: 发现 {len(missing_tasks)} 个缺少的 QC 任务，开始补充创建")
+
+            # 创建缺少的任务
+            created_count = 0
+            for task in missing_tasks:
+                try:
+                    qc_job_id = self._create_qc_job_for_cluster_analysis(
+                        job_id, md_job_id, task, config.get('qc_config', {})
+                    )
+                    if qc_job_id:
+                        created_count += 1
+                except Exception as e:
+                    self.logger.error(f"补充创建 QC 任务失败 (type={task.get('task_type')}): {e}")
+
+            return created_count
+
+        except Exception as e:
+            self.logger.error(f"检查缺少的 QC 任务失败: {e}", exc_info=True)
+            return 0
+
+    def _check_waiting_desolvation_jobs_via_api(self):
+        """
+        通过 API 检查等待 QC 任务完成的去溶剂化任务
+
+        对于处于 POSTPROCESSING 状态（Phase 2 等待中）的任务，
+        检查其 QC 任务是否已完成，如果完成则继续计算去溶剂化能。
+        """
+        try:
+            # 1. 获取等待中的去溶剂化任务
+            endpoint = f"{self.api_base_url}/workers/jobs/waiting_desolvation"
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code != 200:
+                self.logger.warning(f"获取等待中的去溶剂化任务失败: {response.status_code}")
+                return
+
+            result = response.json()
+            waiting_jobs = result.get('jobs', [])
+
+            if not waiting_jobs:
+                return
+
+            self.logger.info(f"发现 {len(waiting_jobs)} 个等待中的去溶剂化任务")
+
+            # 2. 对每个任务调用检查接口
+            for job in waiting_jobs:
+                job_id = job['id']
+                try:
+                    check_endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/check_waiting_desolvation"
+                    check_response = requests.post(
+                        check_endpoint,
+                        headers=self.api_headers,
+                        timeout=120  # 计算可能需要较长时间
+                    )
+
+                    if check_response.status_code == 200:
+                        check_result = check_response.json()
+                        status = check_result.get('status')
+                        if status == 'completed':
+                            self.logger.info(f"去溶剂化任务 {job_id}: 计算完成")
+                        elif status == 'waiting':
+                            self.logger.debug(f"去溶剂化任务 {job_id}: 仍在等待 QC 完成")
+                        else:
+                            self.logger.info(f"去溶剂化任务 {job_id}: 状态 {status}")
+                    else:
+                        self.logger.warning(f"检查去溶剂化任务 {job_id} 失败: {check_response.status_code} - {check_response.text[:200]}")
+
+                except Exception as e:
+                    self.logger.error(f"检查去溶剂化任务 {job_id} 异常: {e}")
+
+        except Exception as e:
+            self.logger.error(f"检查等待中的去溶剂化任务失败: {e}", exc_info=True)
+
+    def _check_cluster_analysis_qc_status(self, job_id: int) -> Dict:
+        """检查 Cluster 高级计算的 QC 任务状态"""
+        try:
+            endpoint = f"{self.api_base_url}/cluster-analysis/jobs/{job_id}/qc-status"
+            response = requests.get(
+                endpoint,
+                headers=self.api_headers,
+                timeout=self.config['api']['timeout']
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.debug(f"Cluster 任务 {job_id} QC 状态详情: all_completed={result.get('all_completed')}, total={result.get('total_qc_jobs')}, completed={result.get('completed')}, failed={result.get('failed')}")
+                return result
+            else:
+                self.logger.warning(f"获取 Cluster 任务 {job_id} QC 状态失败: HTTP {response.status_code}, 响应: {response.text[:200]}")
+                return {}
+
+        except Exception as e:
+            self.logger.error(f"检查 Cluster 任务 {job_id} QC 状态异常: {e}", exc_info=True)
+            return {}
+
+    def _calculate_cluster_analysis_results(self, job: Dict):
+        """计算 Cluster 高级计算结果"""
+        job_id = job['id']
+
+        try:
+            self.logger.info(f"Cluster 任务 {job_id}: 开始计算结果（所有 QC 任务已完成）")
+
+            # 更新状态为 CALCULATING
+            self._update_job_status(job_id, 'CALCULATING', 'cluster_analysis', progress=90)
+
+            # 调用 API 计算结果
+            endpoint = f"{self.api_base_url}/cluster-analysis/jobs/{job_id}/calculate"
+            self.logger.info(f"Cluster 任务 {job_id}: 调用 API 端点 {endpoint}")
+
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                timeout=120  # 计算可能需要较长时间
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"Cluster 任务 {job_id}: 结果计算完成")
+                self._update_job_status(
+                    job_id, 'COMPLETED', 'cluster_analysis',
+                    progress=100,
+                    result=result.get('results', {})
+                )
+            else:
+                self.logger.error(f"Cluster 任务 {job_id}: 计算结果失败 - HTTP {response.status_code}, 响应: {response.text[:200]}")
+                self._update_job_status(
+                    job_id, 'FAILED', 'cluster_analysis',
+                    error_message=f"计算结果失败: {response.text[:200]}"
+                )
+
+        except Exception as e:
+            self.logger.error(f"计算 Cluster 任务 {job_id} 结果失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'cluster_analysis', error_message=str(e))
+
+    def _create_qc_job_for_cluster_analysis(self, cluster_job_id: int, md_job_id: int,
+                                            task: Dict, qc_config: Dict) -> Optional[int]:
+        """为 Cluster 高级计算创建 QC 任务"""
+        task_type = task.get('task_type', '')
+        smiles = task.get('smiles') or None  # 空字符串转为 None，让后端使用 XYZ 结构
+        structure_id = task.get('structure_id')
+        charge = task.get('charge', 0)
+        multiplicity = task.get('multiplicity', 1)
+
+        # 根据 task_type 决定溶剂配置
+        # 规则：
+        # 1. *_gas 后缀 → 气相（无溶剂），用于 redox 热力学循环中的气相计算
+        # 2. *_sol 后缀 → 使用配置的溶剂模型，用于 redox 热力学循环中的溶剂相计算
+        # 3. 其他任务（cluster, ligand, dimer, ion, cluster_minus, reorg_* 等）→ 使用默认配置
+        if task_type.endswith('_gas'):
+            # 气相计算，不使用溶剂
+            solvent_model = 'gas'
+            solvent_name = None
+        elif task_type.endswith('_sol'):
+            # 溶剂相计算，使用配置的溶剂模型
+            solvent_model = qc_config.get('solvent_model') or 'pcm'
+            solvent_name = qc_config.get('solvent') or qc_config.get('solvent_name')
+        else:
+            # 其他任务使用默认配置
+            solvent_model = qc_config.get('solvent_model') or 'gas'
+            solvent_name = qc_config.get('solvent') or qc_config.get('solvent_name')
+
+        # 构建溶剂配置对象（符合 QCJobCreate schema）
+        solvent_config = None
+        if solvent_model and solvent_model.lower() != 'gas':
+            solvent_config = {
+                'model': solvent_model.lower(),
+                'solvent_name': solvent_name
+            }
+
+        # 对于从 cluster 中提取的分子，需要从 cluster XYZ 中提取坐标
+        xyz_content = None
+        if structure_id:
+            # 从 API 获取 cluster 结构
+            try:
+                structure_endpoint = f"{self.api_base_url}/solvation-structures/{structure_id}"
+                structure_response = requests.get(
+                    structure_endpoint,
+                    headers=self.api_headers,
+                    timeout=30
+                )
+                if structure_response.status_code == 200:
+                    structure_data = structure_response.json()
+                    cluster_xyz = structure_data.get('xyz_content', '')
+                    mol_order = structure_data.get('mol_order', [])
+
+                    if not cluster_xyz:
+                        self.logger.error(f"Structure {structure_id} has empty xyz_content")
+                    elif not mol_order:
+                        self.logger.error(f"Structure {structure_id} has empty mol_order")
+
+                    if cluster_xyz and mol_order:
+                        coord_lines = cluster_xyz.strip().split('\n')[2:]  # 跳过原子数和注释行
+
+                        if task_type == 'cluster':
+                            xyz_content = cluster_xyz
+                        elif task_type.startswith('ligand_'):
+                            ligand_name = task_type.replace('ligand_', '')
+                            xyz_content = self._extract_single_ligand(coord_lines, mol_order, ligand_name)
+                        elif task_type.startswith('dimer_'):
+                            dimer_name = task_type.replace('dimer_', '')
+                            xyz_content = self._extract_dimer(coord_lines, mol_order, dimer_name)
+                        elif task_type.startswith('cluster_minus_'):
+                            parts = task_type.replace('cluster_minus_', '').split('_')
+                            exclude_ligands = {}
+                            for i in range(0, len(parts), 2):
+                                if i + 1 < len(parts):
+                                    mol_name = parts[i]
+                                    count = int(parts[i + 1])
+                                    exclude_ligands[mol_name] = count
+                            xyz_content = self._extract_cluster_minus(coord_lines, mol_order, exclude_ligands)
+                        elif task_type.startswith('intermediate_'):
+                            # 中间态：cluster 保留指定的配体
+                            # task_type 格式: intermediate_DEC_2_PF6_1
+                            composition_str = task_type.replace('intermediate_', '')
+
+                            # 从 composition_str 解析保留的配体
+                            # 例如 "DEC_2_PF6_1" -> {"DEC": 2, "PF6": 1}
+                            # 格式规则：配体名称_数量_配体名称_数量...
+                            # 配体名称可能包含数字（如 PF6, BF4），但总是以字母开头
+                            # 数量总是纯数字
+                            kept_ligands = {}
+                            parts = composition_str.split('_')
+                            i = 0
+                            while i < len(parts):
+                                # 收集配体名称（可能包含数字）
+                                ligand_parts = [parts[i]]
+                                i += 1
+
+                                # 继续收集，直到遇到纯数字（数量）
+                                while i < len(parts) and not parts[i].isdigit():
+                                    ligand_parts.append(parts[i])
+                                    i += 1
+
+                                # 合并配体名称
+                                ligand_name = ''.join(ligand_parts)
+
+                                # 读取数量
+                                if i < len(parts) and parts[i].isdigit():
+                                    count = int(parts[i])
+                                    i += 1
+                                else:
+                                    # 没有数量，默认为 1
+                                    count = 1
+
+                                kept_ligands[ligand_name] = count
+
+                            self.logger.debug(f"Intermediate task {task_type}: kept_ligands={kept_ligands}")
+
+                            # 计算要排除的配体（全部 - 保留）
+                            # mol_order 是列表格式: [{"mol_name": "EC", "atom_count": 10}, ...]
+                            # 首先统计每种配体的总数量（通过计算 mol_order 中的出现次数）
+                            mol_counts = {}
+                            for mol_item in mol_order:
+                                lig_name = mol_item.get('mol_name')
+                                # 排除中心离子（通常是 Li）
+                                if lig_name and lig_name not in ['Li', 'Na', 'K', 'Mg', 'Ca']:
+                                    mol_counts[lig_name] = mol_counts.get(lig_name, 0) + 1
+
+                            self.logger.debug(f"Intermediate task {task_type}: mol_counts={mol_counts}")
+
+                            # 计算要排除的配体数量
+                            exclude_ligands = {}
+                            for lig_name, total_count in mol_counts.items():
+                                exclude_count = total_count - kept_ligands.get(lig_name, 0)
+                                if exclude_count > 0:
+                                    exclude_ligands[lig_name] = exclude_count
+
+                            self.logger.debug(f"Intermediate task {task_type}: exclude_ligands={exclude_ligands}")
+
+                            # 使用 _extract_cluster_minus 提取坐标
+                            if exclude_ligands:
+                                xyz_content = self._extract_cluster_minus(coord_lines, mol_order, exclude_ligands)
+                                if xyz_content:
+                                    self.logger.info(f"Successfully extracted intermediate xyz_content for {task_type}")
+                                else:
+                                    self.logger.error(f"Failed to extract intermediate xyz_content for {task_type}")
+                            else:
+                                # 如果没有要排除的配体，使用完整 cluster
+                                xyz_content = cluster_xyz
+                                self.logger.info(f"No ligands to exclude for {task_type}, using full cluster")
+
+                        if xyz_content:
+                            self.logger.info(f"Extracted XYZ for {task_type} from structure {structure_id}")
+                            smiles = None  # 对于从 cluster 提取的分子，不使用 SMILES
+                        else:
+                            self.logger.error(f"Failed to extract XYZ for {task_type} from structure {structure_id}")
+                else:
+                    self.logger.error(f"Failed to fetch structure {structure_id}: HTTP {structure_response.status_code}")
+            except Exception as e:
+                self.logger.error(f"Exception while extracting XYZ from structure {structure_id}: {e}", exc_info=True)
+
+        # Extract molecule name from task_type (include MD job ID and structure ID for filesystem safety)
+        # Format: MD{md_job_id}_{task_type_suffix}_{structure_id}（对于从 cluster 提取的分子）
+        # Examples:
+        #   - ion -> MD1263_ion
+        #   - ligand_PF6 -> MD1263_ligand_PF6_1268
+        #   - dimer_Li_PF6 -> MD1263_dimer_Li_PF6_1268
+        #   - cluster -> MD1263_cluster_1268
+        import re
+        if task_type == 'ion':
+            molecule_name = f"MD{md_job_id}_ion"
+        elif task_type.startswith('ligand_'):
+            ligand_name = task_type.replace('ligand_', '')
+            if structure_id:
+                molecule_name = f"MD{md_job_id}_ligand_{ligand_name}_{structure_id}"
+            else:
+                molecule_name = f"MD{md_job_id}_ligand_{ligand_name}"
+        elif task_type.startswith('dimer_'):
+            dimer_name = task_type.replace('dimer_', '')
+            if structure_id:
+                molecule_name = f"MD{md_job_id}_dimer_{dimer_name}_{structure_id}"
+            else:
+                molecule_name = f"MD{md_job_id}_dimer_{dimer_name}"
+        elif task_type.startswith('redox_mol_'):
+            match = re.match(r'redox_mol_(.+)_(neutral|charged)_(gas|sol)$', task_type)
+            mol_name = match.group(1) if match else task_type.replace('redox_mol_', '').rsplit('_', 2)[0]
+            molecule_name = f"MD{md_job_id}_redox_mol_{mol_name}"
+        elif task_type.startswith('redox_dimer_'):
+            match = re.match(r'redox_dimer_(.+)_(neutral|charged)_(gas|sol)$', task_type)
+            dimer_name = match.group(1) if match else task_type.replace('redox_dimer_', '').rsplit('_', 2)[0]
+            molecule_name = f"MD{md_job_id}_redox_dimer_{dimer_name}"
+        elif task_type.startswith('intermediate_'):
+            # intermediate_DEC2PF6_1 -> MD1263_intermediate_DEC2PF6_1_1518
+            if structure_id:
+                molecule_name = f"MD{md_job_id}_{task_type}_{structure_id}"
+            else:
+                molecule_name = f"MD{md_job_id}_{task_type}"
+        elif task_type.startswith('cluster'):
+            # cluster, cluster_minus_*, reorg_cluster_*, redox_cluster_*
+            if structure_id and task_type == 'cluster':
+                molecule_name = f"MD{md_job_id}_cluster_{structure_id}"
+            elif structure_id:
+                molecule_name = f"MD{md_job_id}_{task_type}_{structure_id}"
+            else:
+                molecule_name = f"MD{md_job_id}_{task_type}"
+        else:
+            molecule_name = f"MD{md_job_id}_{task_type}"
+
+        # 构建 QC 任务配置
+        qc_job_config = {
+            'molecule_name': molecule_name,
+            'charge': charge,
+            'spin_multiplicity': multiplicity,
+            'functional': qc_config.get('functional', 'B3LYP'),
+            'basis_set': qc_config.get('basis_set', '6-31G(d)'),
+            'solvent_config': solvent_config,
+            'md_job_id': md_job_id,
+            # Cluster Analysis 关联字段
+            'cluster_analysis_job_id': cluster_job_id,
+            'task_type': task_type,
+            'solvation_structure_id': structure_id,
+            # Slurm 资源配置
+            'slurm_partition': qc_config.get('slurm_partition', 'hpc128c'),  # 默认使用 hpc128c
+            'slurm_cpus': qc_config.get('slurm_cpus', 16),
+            'slurm_time': qc_config.get('slurm_time', 7200),
+        }
+
+        # 只有当 smiles 有值时才添加（cluster 类型任务没有 SMILES，使用 XYZ 结构）
+        if smiles:
+            qc_job_config['smiles'] = smiles
+
+        # 如果有 XYZ 坐标，添加到 config 中
+        if xyz_content:
+            qc_job_config['xyz_content'] = xyz_content
+
+        # 调用 API 创建 QC 任务
+        try:
+            endpoint = f"{self.api_base_url}/qc/jobs"
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                json=qc_job_config,
+                timeout=30
+            )
+
+            if response.status_code in [200, 201]:
+                result = response.json()
+                qc_job_id = result.get('id')
+                self.logger.info(f"创建 QC 任务成功: {qc_job_id} (type={task_type})")
+
+                # 创建成功后立即提交任务，将状态从 CREATED 改为 SUBMITTED
+                # 使用 try-except 包裹，避免因为竞态条件导致整个流程失败
+                try:
+                    submit_success = self._submit_qc_job(qc_job_id)
+                    if not submit_success:
+                        # 提交失败可能是因为任务已经被 Polling Worker 获取并处理
+                        # 这种情况下任务仍然会被处理，只是警告一下
+                        self.logger.warning(f"QC 任务 {qc_job_id} 创建成功但提交失败（可能已被 Worker 获取），任务仍会被处理")
+                except Exception as e:
+                    # 捕获所有异常，避免影响主流程
+                    self.logger.warning(f"QC 任务 {qc_job_id} 提交时出现异常: {e}，任务仍会被 Worker 处理")
+
+                return qc_job_id
+            else:
+                self.logger.error(f"创建 QC 任务失败: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"创建 QC 任务异常: {e}")
+            return None
+
+    def _process_anion_generation_job(self, job: Dict):
+        """
+        处理阴离子生成任务
+
+        流程：
+        1. 直接调用后端任务处理函数（在 polling_worker 中执行）
+        2. 任务会创建 QC 任务并等待完成
+        3. 轮询任务状态直到完成
+        """
+        job_id = job['id']
+
+        self.logger.info(f"开始处理阴离子生成任务 {job_id}")
+
+        try:
+            # 导入后端任务处理函数
+            import sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
+            from app.tasks.anion_generation import process_anion_generation_job
+            from app.database import SessionLocal
+            from app.models import AnionGenerationJob
+
+            # 直接调用任务处理函数
+            # 这会在 polling_worker 中执行，可以访问 Gaussian、Multiwfn、Sobtop 等工具
+            success = process_anion_generation_job(job_id)
+
+            if success:
+                self.logger.info(f"阴离子生成任务 {job_id} 已完成")
+
+                # 获取关联的 QC 任务的 CPU 核时
+                cpu_hours = None
+                try:
+                    db = SessionLocal()
+                    anion_job = db.query(AnionGenerationJob).filter(AnionGenerationJob.id == job_id).first()
+                    if anion_job and anion_job.qc_job_id:
+                        # 从关联的 QC 任务获取 CPU 核时
+                        from app.models import QCJob
+                        qc_job = db.query(QCJob).filter(QCJob.id == anion_job.qc_job_id).first()
+                        if qc_job and qc_job.actual_cpu_hours:
+                            cpu_hours = qc_job.actual_cpu_hours
+                            self.logger.info(f"阴离子生成任务 {job_id} 的关联 QC 任务 CPU hours: {cpu_hours:.2f}")
+                    db.close()
+                except Exception as e:
+                    self.logger.warning(f"获取阴离子生成任务 {job_id} 的 CPU 核时失败: {e}")
+
+                self._update_job_status(job_id, 'COMPLETED', 'anion_generation', progress=100.0, cpu_hours=cpu_hours)
+            else:
+                self.logger.error(f"阴离子生成任务 {job_id} 处理失败")
+                self._update_job_status(job_id, 'FAILED', 'anion_generation',
+                                       error_message='任务处理失败')
+
+        except Exception as e:
+            self.logger.error(f"处理阴离子生成任务 {job_id} 失败: {e}", exc_info=True)
+            self._update_job_status(job_id, 'FAILED', 'anion_generation', error_message=str(e))
+
+    def _submit_qc_job(self, qc_job_id: int) -> bool:
+        """
+        提交 QC 任务，将状态从 CREATED 改为 SUBMITTED
+
+        Args:
+            qc_job_id: QC 任务 ID
+
+        Returns:
+            bool: 提交是否成功
+        """
+        try:
+            endpoint = f"{self.api_base_url}/qc/jobs/{qc_job_id}/submit"
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                self.logger.info(f"QC 任务 {qc_job_id} 提交成功，状态已改为 SUBMITTED")
+                return True
+            elif response.status_code == 400:
+                # 400 错误可能是因为任务已经被 Polling Worker 获取并处理（状态不是 CREATED）
+                # 这种情况下任务仍然会被处理，不算失败
+                error_detail = response.json().get('detail', '')
+                if 'cannot be submitted' in error_detail.lower():
+                    self.logger.info(f"QC 任务 {qc_job_id} 已被 Worker 获取处理，无需重复提交")
+                    return True  # 返回 True，因为任务会被处理
+                else:
+                    self.logger.error(f"QC 任务 {qc_job_id} 提交失败: {response.status_code} - {response.text}")
+                    return False
+            else:
+                self.logger.error(f"QC 任务 {qc_job_id} 提交失败: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"QC 任务 {qc_job_id} 提交异常: {e}")
+            return False
+
+    def _process_anion_generation_job(self, job: Dict):
+        """
+        处理阴离子生成任务
+
+        阴离子生成任务的处理流程：
+        1. 如果是 PENDING 状态：调用后端 API 进行准备工作（解析输入、创建QC任务）
+        2. 如果是 QC_PENDING 状态：直接执行计算流程（Gaussian、Multiwfn、Sobtop）
+        """
+        job_id = job['id']
+        config = job.get('config', {})
+        anion_name = config.get('anion_name', 'Unknown')
+        job_status = config.get('status', 'pending')
+
+        self.logger.info(f"开始处理阴离子生成任务 {job_id} (阴离子: {anion_name}, 状态: {job_status})")
+
+        try:
+            if job_status == 'pending':
+                # PENDING 状态：调用后端 API 进行准备工作
+                self.logger.info(f"任务 {job_id} 处于 PENDING 状态，调用后端进行准备工作")
+                endpoint = f"{self.api_base_url}/workers/jobs/{job_id}/process_anion_generation"
+
+                response = requests.post(
+                    endpoint,
+                    headers=self.api_headers,
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    self.logger.info(f"阴离子生成任务 {job_id} 准备工作完成: {result.get('message', '')}")
+
+                    # 准备工作完成后，任务状态应该变为 QC_PENDING
+                    # 在下一个轮询周期中会被重新拉取并执行计算流程
+
+                else:
+                    error_msg = f"API 调用失败: {response.status_code} - {response.text}"
+                    self.logger.error(f"阴离子生成任务 {job_id} 处理失败: {error_msg}")
+
+            elif job_status == 'qc_pending':
+                # QC_PENDING 状态：直接执行计算流程
+                self.logger.info(f"任务 {job_id} 处于 QC_PENDING 状态，开始执行计算流程")
+                self._execute_anion_generation_computation(job_id, config)
+
+            else:
+                self.logger.warning(f"阴离子生成任务 {job_id} 状态异常: {job_status}")
+
+        except Exception as e:
+            self.logger.error(f"处理阴离子生成任务 {job_id} 失败: {e}", exc_info=True)
+
+    def _execute_anion_generation_computation(self, job_id: int, config: Dict):
+        """
+        执行阴离子生成的完整计算流程
+
+        这个方法在校园网上执行所有步骤：
+        1. 解析输入（CAS/SMILES）并生成3D结构
+        2. 创建并提交 QC 任务到 Slurm
+        3. 等待并监控 QC 任务完成
+        4. 运行 Multiwfn 生成 mol2 文件
+        5. 运行 Sobtop 生成 GROMACS 拓扑
+        6. 转换为 LAMMPS 格式
+        7. 通知后端完成
+        """
+        anion_name = config.get('anion_name', 'Unknown')
+        identifier_type = config.get('identifier_type', 'smiles')
+        identifier_value = config.get('identifier_value', '')
+        charge = config.get('charge', -1)
+
+        self.logger.info(f"开始执行阴离子 {anion_name} 的完整计算流程 (任务 {job_id})")
+
+        try:
+            # 步骤1: 解析输入并生成3D结构
+            self.logger.info(f"步骤1: 解析输入 {identifier_type}={identifier_value}")
+            self._update_anion_generation_status(job_id, "running", f"Step 1/7: Parsing {identifier_type} and generating 3D structure")
+
+            coords_data = self._parse_anion_input_and_generate_3d(
+                anion_name, identifier_type, identifier_value, charge
+            )
+            if not coords_data:
+                self.logger.error(f"解析输入失败: {identifier_type}={identifier_value}")
+                self._update_anion_generation_status(job_id, "failed", "Failed to parse input and generate 3D structure")
+                return
+
+            # 步骤2: 创建并提交 QC 任务（直接提交到 Slurm）
+            self.logger.info(f"步骤2: 生成 Gaussian 输入并提交到 Slurm")
+            self._update_anion_generation_status(job_id, "running", "Step 2/7: Creating and submitting Gaussian job to Slurm")
+
+            qc_result = self._create_anion_qc_job(job_id, anion_name, coords_data, charge)
+            if not qc_result:
+                self.logger.error(f"创建并提交 Gaussian 任务失败")
+                self._update_anion_generation_status(job_id, "failed", "Failed to create and submit Gaussian job")
+                return
+
+            slurm_job_id = qc_result['slurm_job_id']
+            work_dir = qc_result['work_dir']
+
+            # 步骤3: 保存任务信息并设置为等待状态（非阻塞）
+            self.logger.info(f"步骤3: Slurm 任务 {slurm_job_id} 已提交，保存任务信息等待完成...")
+            self._save_running_task_info(job_id, slurm_job_id, work_dir, anion_name, coords_data)
+            self._update_anion_generation_status(job_id, "qc_running", f"Step 3/7: Gaussian job {slurm_job_id} is running on Slurm")
+            self.logger.info(f"✅ 阴离子任务 {job_id} 已提交到 Slurm ({slurm_job_id})，等待计算完成")
+
+        except Exception as e:
+            self.logger.error(f"执行阴离子生成计算流程失败 {job_id}: {e}", exc_info=True)
+            self._update_anion_generation_status(job_id, "failed", f"Computation error: {str(e)}")
+
+    def _get_anion_generation_job_info(self, job_id: int) -> Dict:
+        """获取阴离子生成任务的详细信息"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/anion_generation/{job_id}/info"
+            response = requests.get(endpoint, headers=self.api_headers, timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                self.logger.error(f"获取阴离子生成任务信息失败: {response.status_code} - {response.text}")
+                return {}
+
+        except Exception as e:
+            self.logger.error(f"获取阴离子生成任务信息异常: {e}")
+            return {}
+
+    def _save_running_task_info(self, anion_job_id: int, slurm_job_id: str, work_dir: str, anion_name: str, coords_data: dict):
+        """保存正在运行的任务信息到文件，用于重启后恢复"""
+        task_info = {
+            'anion_job_id': anion_job_id,
+            'slurm_job_id': slurm_job_id,
+            'work_dir': work_dir,
+            'anion_name': anion_name,
+            'coords_data': coords_data,
+            'start_time': time.time(),
+            'status': 'running'
+        }
+
+        # 保存到临时文件
+        task_file = Path(f"/tmp/anion_task_{anion_job_id}.json")
+        try:
+            with open(task_file, 'w') as f:
+                json.dump(task_info, f, indent=2)
+            self.logger.info(f"已保存任务信息: {task_file}")
+        except Exception as e:
+            self.logger.error(f"保存任务信息失败: {e}")
+
+    def _remove_running_task_info(self, anion_job_id: int):
+        """删除已完成任务的信息文件"""
+        task_file = Path(f"/tmp/anion_task_{anion_job_id}.json")
+        try:
+            if task_file.exists():
+                task_file.unlink()
+                self.logger.info(f"已删除任务信息文件: {task_file}")
+        except Exception as e:
+            self.logger.error(f"删除任务信息文件失败: {e}")
+
+    def _check_running_tasks_on_startup(self):
+        """启动时检查是否有未完成的任务需要恢复"""
+        task_files = list(Path("/tmp").glob("anion_task_*.json"))
+
+        for task_file in task_files:
+            try:
+                with open(task_file, 'r') as f:
+                    task_info = json.load(f)
+
+                anion_job_id = task_info['anion_job_id']
+                slurm_job_id = task_info['slurm_job_id']
+                work_dir = task_info['work_dir']
+                anion_name = task_info['anion_name']
+                coords_data = task_info['coords_data']
+                start_time = task_info['start_time']
+
+                # 检查任务是否超时（6小时）
+                if time.time() - start_time > 3600 * 6:
+                    self.logger.warning(f"任务 {anion_job_id} 已超时，删除任务信息")
+                    self._remove_running_task_info(anion_job_id)
+                    continue
+
+                # 检查 Slurm 任务状态
+                work_path = Path(work_dir)
+                fchk_files = list(work_path.glob("*.fchk"))
+
+                if fchk_files:
+                    # 任务已完成，进行后处理
+                    self.logger.info(f"🔄 恢复任务 {anion_job_id}: Slurm 任务 {slurm_job_id} 已完成，开始后处理")
+
+                    if self._process_anion_qc_results(anion_job_id, work_dir, anion_name, coords_data):
+                        self._update_anion_generation_status(anion_job_id, "success", "Anion generation completed successfully")
+                        self.logger.info(f"✅ 任务 {anion_job_id} 恢复并完成")
+                    else:
+                        self._update_anion_generation_status(anion_job_id, "failed", "Post-processing failed")
+                        self.logger.error(f"❌ 任务 {anion_job_id} 后处理失败")
+
+                    self._remove_running_task_info(anion_job_id)
+                else:
+                    # 检查 Slurm 任务是否还在运行
+                    result = subprocess.run(
+                        ['squeue', '-j', slurm_job_id, '-h', '-o', '%T'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+
+                    if result.returncode == 0 and result.stdout.strip():
+                        # 任务还在运行，继续等待
+                        status = result.stdout.strip()
+                        self.logger.info(f"🔄 恢复任务 {anion_job_id}: Slurm 任务 {slurm_job_id} 状态 {status}，继续等待")
+                        # 不删除任务信息，下次轮询时继续检查
+                    else:
+                        # 任务已结束但没有 fchk 文件，说明失败了
+                        self.logger.error(f"❌ 任务 {anion_job_id}: Slurm 任务 {slurm_job_id} 已结束但未找到 fchk 文件")
+                        self._update_anion_generation_status(anion_job_id, "failed", "Gaussian calculation failed")
+                        self._remove_running_task_info(anion_job_id)
+
+            except Exception as e:
+                self.logger.error(f"恢复任务信息失败 {task_file}: {e}")
+
+    def _wait_for_slurm_job_completion(self, slurm_job_id: str, work_dir: str, anion_job_id: int) -> bool:
+        """非阻塞方式检查 Slurm 任务完成状态"""
+        try:
+            # 使用 squeue 检查任务状态
+            result = subprocess.run(
+                ['squeue', '-j', slurm_job_id, '-h', '-o', '%T'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                # 任务还在队列中
+                status = result.stdout.strip()
+                self.logger.info(f"Slurm 任务 {slurm_job_id} 状态: {status}")
+                return False  # 还未完成
+            else:
+                # 任务已经完成或失败，检查输出文件
+                work_path = Path(work_dir)
+                fchk_files = list(work_path.glob("*.fchk"))
+
+                if fchk_files:
+                    self.logger.info(f"✅ Slurm 任务 {slurm_job_id} 已完成，找到 fchk 文件")
+                    return True  # 完成
+                else:
+                    self.logger.error(f"❌ Slurm 任务 {slurm_job_id} 完成但未找到 fchk 文件")
+                    # 检查错误日志
+                    err_log = work_path / "qc_err.log"
+                    if err_log.exists():
+                        with open(err_log, 'r') as f:
+                            error_content = f.read()
+                            self.logger.error(f"错误日志: {error_content[:500]}")
+                    return False  # 失败
+
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"squeue 命令超时")
+            return False
+        except Exception as e:
+            self.logger.error(f"检查 Slurm 任务状态异常: {e}")
+            return False
+
+    def _wait_for_qc_job_completion(self, qc_job_id: int, anion_job_id: int) -> bool:
+        """等待 QC 任务完成（通过后端 API）"""
+        max_wait_time = 3600 * 6  # 6小时超时
+        check_interval = 60  # 每分钟检查一次
+        waited_time = 0
+
+        self._update_anion_generation_status(anion_job_id, "qc_running", f"QC job {qc_job_id} is running")
+
+        while waited_time < max_wait_time:
+            try:
+                # 检查 QC 任务状态
+                endpoint = f"{self.api_base_url}/qc/jobs/{qc_job_id}/status"
+                response = requests.get(endpoint, headers=self.api_headers, timeout=30)
+
+                if response.status_code == 200:
+                    status_data = response.json()
+                    status = status_data.get('status', '').lower()
+
+                    if status == 'completed':
+                        self.logger.info(f"QC 任务 {qc_job_id} 已完成")
+                        self._update_anion_generation_status(anion_job_id, "qc_completed", "QC job completed, processing results")
+                        return True
+                    elif status in ['failed', 'cancelled']:
+                        self.logger.error(f"QC 任务 {qc_job_id} 失败: {status}")
+                        return False
+                    else:
+                        self.logger.info(f"QC 任务 {qc_job_id} 状态: {status}")
+
+                time.sleep(check_interval)
+                waited_time += check_interval
+
+            except Exception as e:
+                self.logger.error(f"检查 QC 任务状态异常: {e}")
+                time.sleep(check_interval)
+                waited_time += check_interval
+
+        self.logger.error(f"QC 任务 {qc_job_id} 等待超时")
+        return False
+
+    def _process_anion_generation_results(self, job_id: int, qc_job_id: int, config: Dict) -> bool:
+        """处理阴离子生成的 QC 结果"""
+        anion_name = config.get('anion_name', 'Unknown')
+
+        try:
+            # 调用后端 API 处理结果
+            endpoint = f"{self.api_base_url}/workers/anion_generation/{job_id}/process_results"
+            payload = {
+                "qc_job_id": qc_job_id,
+                "anion_name": anion_name
+            }
+
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=self.api_headers,
+                timeout=300  # 5分钟超时，因为可能需要处理大文件
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"阴离子生成结果处理成功: {result.get('message', '')}")
+                return True
+            else:
+                self.logger.error(f"阴离子生成结果处理失败: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"处理阴离子生成结果异常: {e}")
+            return False
+
+    def _update_anion_generation_status(self, job_id: int, status: str, message: str):
+        """更新阴离子生成任务状态"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/anion_generation/{job_id}/status"
+            payload = {
+                "status": status,
+                "message": message
+            }
+
+            response = requests.put(
+                endpoint,
+                json=payload,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                self.logger.info(f"阴离子生成任务 {job_id} 状态更新为: {status}")
+            else:
+                self.logger.error(f"更新阴离子生成任务状态失败: {response.status_code} - {response.text}")
+
+        except Exception as e:
+            self.logger.error(f"更新阴离子生成任务状态异常: {e}")
+
+    def _parse_anion_input_and_generate_3d(self, anion_name: str, identifier_type: str, identifier_value: str, charge: int) -> dict:
+        """
+        解析阴离子输入并生成3D结构
+
+        支持 CAS 号和 SMILES 输入
+        对于盐类（如 LiDFOP），自动提取阴离子部分
+        """
+        try:
+            # 导入 RDKit（只在需要时导入）
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+            import requests as req
+
+            self.logger.info(f"解析 {identifier_type}: {identifier_value}")
+
+            if identifier_type == "smiles":
+                smiles = identifier_value
+            elif identifier_type == "cas":
+                # 通过 PubChem API 获取 SMILES
+                self.logger.info(f"通过 PubChem API 查询 CAS {identifier_value}")
+                pubchem_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{identifier_value}/property/CanonicalSMILES,ConnectivitySMILES/JSON"
+
+                response = req.get(pubchem_url, timeout=30)
+                if response.status_code != 200:
+                    raise Exception(f"PubChem API 查询失败: {response.status_code}")
+
+                data = response.json()
+                properties = data['PropertyTable']['Properties'][0]
+
+                # 优先使用 CanonicalSMILES，如果没有则使用 ConnectivitySMILES
+                if 'CanonicalSMILES' in properties:
+                    smiles = properties['CanonicalSMILES']
+                    self.logger.info(f"获取到 CanonicalSMILES: {smiles}")
+                elif 'ConnectivitySMILES' in properties:
+                    smiles = properties['ConnectivitySMILES']
+                    self.logger.info(f"获取到 ConnectivitySMILES: {smiles}")
+                else:
+                    raise Exception(f"PubChem 返回的数据中没有找到 SMILES 信息")
+
+                self.logger.info(f"获取到 SMILES: {smiles}")
+            else:
+                raise Exception(f"不支持的标识符类型: {identifier_type}")
+
+            # 如果是盐类，提取阴离子部分
+            anion_smiles = self._extract_anion_from_salt(smiles, charge)
+            self.logger.info(f"阴离子 SMILES: {anion_smiles}")
+
+            # 生成3D结构
+            mol = Chem.MolFromSmiles(anion_smiles)
+            if mol is None:
+                raise Exception(f"无法解析 SMILES: {anion_smiles}")
+
+            # 添加氢原子
+            mol = Chem.AddHs(mol)
+
+            # 生成3D坐标
+            AllChem.EmbedMolecule(mol, randomSeed=42)
+            AllChem.UFFOptimizeMolecule(mol)
+
+            # 提取坐标
+            conf = mol.GetConformer()
+            coords = []
+            for i, atom in enumerate(mol.GetAtoms()):
+                pos = conf.GetAtomPosition(i)
+                coords.append({
+                    'element': atom.GetSymbol(),
+                    'x': pos.x,
+                    'y': pos.y,
+                    'z': pos.z
+                })
+
+            return {
+                'smiles': anion_smiles,
+                'coordinates': coords,
+                'num_atoms': len(coords)
+            }
+
+        except Exception as e:
+            self.logger.error(f"解析输入失败: {e}", exc_info=True)
+            return None
+
+    def _extract_anion_from_salt(self, smiles: str, target_charge: int) -> str:
+        """
+        从盐的 SMILES 中提取阴离子部分
+
+        例如: LiDFOP -> DFOP
+        """
+        try:
+            from rdkit import Chem
+
+            # 解析分子
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                # 如果无法解析，可能已经是阴离子，直接返回
+                return smiles
+
+            # 获取分子片段
+            fragments = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=False)
+
+            if len(fragments) == 1:
+                # 只有一个片段，可能已经是阴离子
+                return smiles
+
+            # 分析所有片段，寻找最合适的阴离子
+            fragment_info = []
+            for frag in fragments:
+                try:
+                    Chem.SanitizeMol(frag)
+                    frag_charge = Chem.rdmolops.GetFormalCharge(frag)
+                    atom_count = frag.GetNumAtoms()
+                    frag_smiles = Chem.MolToSmiles(frag)
+
+                    fragment_info.append({
+                        'frag': frag,
+                        'charge': frag_charge,
+                        'atoms': atom_count,
+                        'smiles': frag_smiles
+                    })
+
+                    self.logger.info(f"片段: {frag_smiles} (电荷: {frag_charge}, 原子数: {atom_count})")
+                except:
+                    continue
+
+            if not fragment_info:
+                return smiles
+
+            # 策略1: 优先选择电荷匹配且原子数 > 2 的片段（排除简单离子如 F-, Cl-）
+            charge_matched_organic = [f for f in fragment_info
+                                     if f['charge'] == target_charge and f['atoms'] > 2]
+
+            if charge_matched_organic:
+                # 选择原子数最多的电荷匹配有机片段
+                largest = max(charge_matched_organic, key=lambda x: x['atoms'])
+                self.logger.info(f"✅ 策略1: 选择电荷匹配的有机片段: {largest['smiles']} (电荷: {largest['charge']}, 原子数: {largest['atoms']})")
+                return largest['smiles']
+
+            # 策略2: 如果没有电荷匹配的有机片段，选择最大的有机片段（原子数 > 2）
+            # 这种情况可能是 RDKit 计算电荷不准确
+            organic_fragments = [f for f in fragment_info if f['atoms'] > 2]
+
+            if organic_fragments:
+                largest_organic = max(organic_fragments, key=lambda x: x['atoms'])
+                self.logger.warning(f"⚠️  策略2: 未找到电荷匹配的片段，选择最大有机片段: {largest_organic['smiles']} "
+                                  f"(电荷: {largest_organic['charge']}, 原子数: {largest_organic['atoms']})")
+                self.logger.warning(f"注意: RDKit 计算的电荷可能不准确，实际电荷应为 {target_charge}")
+                return largest_organic['smiles']
+
+            # 策略3: 如果没有有机片段，选择电荷匹配的任意片段
+            charge_matched = [f for f in fragment_info if f['charge'] == target_charge]
+            if charge_matched:
+                largest_charged = max(charge_matched, key=lambda x: x['atoms'])
+                self.logger.info(f"策略3: 选择电荷匹配的片段: {largest_charged['smiles']} (原子数: {largest_charged['atoms']})")
+                return largest_charged['smiles']
+
+            # 策略4: 最后选择原子数最多的片段
+            largest_frag_info = max(fragment_info, key=lambda x: x['atoms'])
+            self.logger.warning(f"⚠️  策略4: 选择最大片段: {largest_frag_info['smiles']} "
+                              f"(电荷: {largest_frag_info['charge']}, 原子数: {largest_frag_info['atoms']})")
+            return largest_frag_info['smiles']
+
+        except Exception as e:
+            self.logger.warning(f"提取阴离子失败，使用原始 SMILES: {e}")
+            return smiles
+
+    def _create_anion_qc_job(self, anion_job_id: int, anion_name: str, coords_data: dict, charge: int) -> dict:
+        """
+        创建阴离子的 QC 任务
+
+        直接生成 Gaussian 输入文件并提交到 Slurm（不通过后端 API，避免复用问题）
+
+        Returns:
+            dict: {'slurm_job_id': str, 'work_dir': str} 或 None
+        """
+        try:
+            # 创建工作目录
+            work_dir = Path(self.config['local']['qc_work_base_path']) / f"anion_{anion_job_id}_{anion_name}"
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+            # 生成 Gaussian 输入文件
+            gjf_file = work_dir / f"{anion_name}.gjf"
+            self._write_gaussian_input_for_anion(gjf_file, anion_name, coords_data, charge)
+            self.logger.info(f"Gaussian 输入文件已生成: {gjf_file}")
+
+            # 生成 Slurm 作业脚本
+            job_script = work_dir / "job.sh"
+            self._generate_qc_job_script(
+                job_script, anion_name,
+                partition="hpc128c",  # 使用 hpc128c 队列
+                cpus=16,
+                time_limit=7200,  # 分钟
+                work_dir=work_dir
+            )
+            self.logger.info(f"Slurm 作业脚本已生成: {job_script}")
+
+            # 提交到 Slurm
+            slurm_result = self._submit_to_slurm(work_dir)
+
+            if not slurm_result['success']:
+                self.logger.error(f"提交 Slurm 任务失败: {slurm_result.get('error')}")
+                return None
+
+            slurm_job_id = slurm_result['slurm_job_id']
+            self.logger.info(f"✅ Gaussian 任务已提交到 Slurm: {slurm_job_id}")
+
+            return {
+                'slurm_job_id': slurm_job_id,
+                'work_dir': str(work_dir)
+            }
+
+        except Exception as e:
+            self.logger.error(f"创建阴离子 QC 任务失败: {e}", exc_info=True)
+            return None
+
+    def _write_gaussian_input_for_anion(self, gjf_file: Path, anion_name: str, coords_data: dict, charge: int):
+        """
+        为阴离子生成 Gaussian 输入文件
+
+        使用弥散基组 6-31++G(d,p) 进行几何优化和频率计算
+        """
+        coordinates = coords_data['coordinates']
+
+        # 计算总电子数以确定自旋多重度
+        atomic_numbers = {
+            'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'P': 15, 'S': 16, 'Cl': 17, 'Br': 35, 'I': 53
+        }
+
+        total_electrons = 0
+        for coord in coordinates:
+            element = coord['element']
+            if element in atomic_numbers:
+                total_electrons += atomic_numbers[element]
+            else:
+                self.logger.warning(f"未知元素: {element}，假设为碳原子")
+                total_electrons += 6
+
+        # 考虑电荷
+        total_electrons -= charge
+
+        # 确定自旋多重度：偶数电子 -> 1（单重态），奇数电子 -> 2（双重态）
+        spin_multiplicity = 2 if total_electrons % 2 == 1 else 1
+
+        self.logger.info(f"分子总电子数: {total_electrons}, 自旋多重度: {spin_multiplicity}")
+
+        # Gaussian 输入内容
+        content = f"""%chk={anion_name}.chk
+%mem=4GB
+%nprocshared=16
+# B3LYP/6-31++G(d,p) opt freq
+
+{anion_name} anion optimization and frequency calculation
+
+{charge} {spin_multiplicity}
+"""
+
+        # 添加坐标
+        for coord in coordinates:
+            content += f"{coord['element']:2s} {coord['x']:12.6f} {coord['y']:12.6f} {coord['z']:12.6f}\n"
+
+        content += "\n"
+
+        # 写入文件
+        with open(gjf_file, 'w') as f:
+            f.write(content)
+
+        self.logger.info(f"Gaussian 输入文件已生成: {gjf_file}")
+
+    def _generate_xyz_content(self, coords_data: dict, anion_name: str) -> str:
+        """
+        从坐标数据生成XYZ格式内容
+        """
+        coordinates = coords_data['coordinates']
+        num_atoms = len(coordinates)
+
+        # XYZ格式：第一行是原子数，第二行是注释，后面是坐标
+        xyz_content = f"{num_atoms}\n"
+        xyz_content += f"{anion_name} anion structure\n"
+
+        for coord in coordinates:
+            xyz_content += f"{coord['element']:2s} {coord['x']:12.6f} {coord['y']:12.6f} {coord['z']:12.6f}\n"
+
+        return xyz_content
+
+    def _update_anion_qc_job_id(self, anion_job_id: int, qc_job_id: int):
+        """更新阴离子生成任务的 QC 任务 ID"""
+        try:
+            endpoint = f"{self.api_base_url}/workers/anion_generation/{anion_job_id}/qc_job"
+            payload = {"qc_job_id": qc_job_id}
+
+            response = requests.put(
+                endpoint,
+                json=payload,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                self.logger.info(f"阴离子任务 {anion_job_id} 的 QC 任务 ID 已更新为: {qc_job_id}")
+            else:
+                self.logger.error(f"更新 QC 任务 ID 失败: {response.status_code} - {response.text}")
+
+        except Exception as e:
+            self.logger.error(f"更新 QC 任务 ID 异常: {e}")
+
+    def _process_anion_qc_results(self, anion_job_id: int, work_dir: str, anion_name: str, coords_data: dict) -> bool:
+        """
+        处理阴离子 QC 结果
+
+        运行 Multiwfn 生成 RESP 电荷，然后直接转换为 LAMMPS 格式
+
+        Args:
+            anion_job_id: 阴离子生成任务 ID
+            work_dir: Gaussian 计算的工作目录
+            anion_name: 阴离子名称
+            coords_data: 坐标数据
+        """
+        try:
+            self.logger.info(f"开始处理阴离子 {anion_name} 的 QC 结果")
+
+            # 步骤4: 运行 Multiwfn 生成 RESP 电荷和 mol2 文件
+            self._update_anion_generation_status(anion_job_id, "qc_completed", "Step 4/7: Running Multiwfn to calculate RESP charges")
+
+            mol2_file = self._run_multiwfn_for_anion_direct(work_dir, anion_name)
+            if not mol2_file:
+                self.logger.error(f"Multiwfn 生成 mol2 文件失败")
+                return False
+
+            # 步骤5: 从 mol2 文件读取 RESP 电荷并更新 coords_data
+            self._update_anion_generation_status(anion_job_id, "qc_completed", "Step 5/7: Extracting RESP charges from mol2")
+
+            # 从mol2文件中提取电荷信息
+            try:
+                with open(mol2_file, 'r') as f:
+                    lines = f.readlines()
+                    in_atom_section = False
+                    atom_idx = 0
+                    for line in lines:
+                        if "@<TRIPOS>ATOM" in line:
+                            in_atom_section = True
+                            continue
+                        if "@<TRIPOS>BOND" in line:
+                            in_atom_section = False
+                            break
+                        if in_atom_section and atom_idx < len(coords_data['coordinates']):
+                            parts = line.split()
+                            if len(parts) >= 6:
+                                charge = float(parts[-1])
+                                coords_data['coordinates'][atom_idx]['charge'] = charge
+                                atom_idx += 1
+            except Exception as e:
+                self.logger.warning(f"从mol2文件提取电荷失败: {e}")
+
+            # 步骤6: 转换为 LAMMPS 格式
+            self._update_anion_generation_status(anion_job_id, "qc_completed", "Step 6/7: Converting to LAMMPS format")
+
+            lt_file, pdb_file = self._convert_to_lammps_format(mol2_file, anion_name, coords_data)
+            if not lt_file or not pdb_file:
+                self.logger.error(f"转换为 LAMMPS 格式失败")
+                return False
+
+            # 步骤7: 上传结果文件并通知后端
+            self._update_anion_generation_status(anion_job_id, "qc_completed", "Step 7/7: Uploading results and registering in library")
+
+            if self._upload_anion_results(anion_job_id, anion_name, mol2_file, None, lt_file, pdb_file):
+                return True
+            else:
+                return False
+
+        except Exception as e:
+            self.logger.error(f"处理阴离子 QC 结果失败: {e}", exc_info=True)
+            return False
+
+    def _generate_mol2_from_chg(self, chg_file: Path, mol2_file: Path) -> bool:
+        """从Multiwfn生成的.chg文件生成mol2文件"""
+        try:
+            # 读取.chg文件获取RESP电荷和坐标
+            atoms = []
+            with open(chg_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        atom_type = parts[0]
+                        x = float(parts[1])
+                        y = float(parts[2])
+                        z = float(parts[3])
+                        charge = float(parts[4])
+                        atoms.append({
+                            'type': atom_type,
+                            'x': x, 'y': y, 'z': z,
+                            'charge': charge
+                        })
+
+            if not atoms:
+                self.logger.error(f"未能从.chg文件读取原子数据: {chg_file}")
+                return False
+
+            # 基于原子间距离推断键连接
+            bonds = self._infer_bonds_from_geometry(atoms)
+
+            # 生成mol2文件
+            mol2_lines = [
+                "@<TRIPOS>MOLECULE",
+                mol2_file.stem,
+                f"{len(atoms)} {len(bonds)} 0 0 0",
+                "SMALL",
+                "RESP",
+                "",
+                "@<TRIPOS>ATOM"
+            ]
+
+            for i, atom in enumerate(atoms, 1):
+                mol2_lines.append(
+                    f"{i} {atom['type']}{i} {atom['x']:.6f} {atom['y']:.6f} {atom['z']:.6f} {atom['type']} 1 RES1 {atom['charge']:.6f}"
+                )
+
+            mol2_lines.append("")
+            mol2_lines.append("@<TRIPOS>BOND")
+
+            # 添加推断出的键连接
+            for i, (atom1, atom2) in enumerate(bonds, 1):
+                mol2_lines.append(f"{i} {atom1} {atom2} 1")
+
+            mol2_lines.append("")
+
+            mol2_content = "\n".join(mol2_lines)
+
+            with open(mol2_file, 'w') as f:
+                f.write(mol2_content)
+
+            self.logger.info(f"✅ 成功从.chg文件生成mol2文件: {mol2_file} (推断出{len(bonds)}个键)")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"生成mol2文件异常: {e}")
+            return False
+
+    def _infer_bonds_from_geometry(self, atoms: list) -> list:
+        """基于原子间距离推断键连接"""
+        import numpy as np
+
+        # 典型的键长范围（单位：埃）
+        bond_distances = {
+            ('C', 'C'): (1.2, 1.8),   # C-C, C=C, C≡C
+            ('C', 'O'): (1.1, 1.6),   # C-O, C=O
+            ('P', 'O'): (1.4, 1.9),   # P-O, P=O (扩大范围以包含1.783Å)
+            ('P', 'F'): (1.4, 1.9),   # P-F (扩大范围以包含1.629Å)
+            ('O', 'O'): (1.2, 1.6),   # O-O (少见但可能)
+            ('F', 'P'): (1.4, 1.9),   # F-P (对称)
+            ('O', 'P'): (1.4, 1.9),   # O-P (对称)
+        }
+
+        bonds = []
+        n_atoms = len(atoms)
+
+        for i in range(n_atoms):
+            for j in range(i + 1, n_atoms):
+                atom1 = atoms[i]
+                atom2 = atoms[j]
+
+                # 计算原子间距离
+                dx = atom1['x'] - atom2['x']
+                dy = atom1['y'] - atom2['y']
+                dz = atom1['z'] - atom2['z']
+                distance = np.sqrt(dx*dx + dy*dy + dz*dz)
+
+                # 获取原子类型
+                type1 = atom1['type']
+                type2 = atom2['type']
+
+                # 检查是否在键长范围内
+                bond_key = tuple(sorted([type1, type2]))
+                if bond_key in bond_distances:
+                    min_dist, max_dist = bond_distances[bond_key]
+                    if min_dist <= distance <= max_dist:
+                        bonds.append((i + 1, j + 1))  # mol2文件中原子索引从1开始
+
+        self.logger.info(f"基于几何信息推断出 {len(bonds)} 个键连接")
+        return bonds
+
+    def _run_multiwfn_for_anion_direct(self, work_dir: str, anion_name: str) -> str:
+        """运行 Multiwfn 生成 RESP 电荷（直接使用工作目录）"""
+        self.logger.info(f"运行 Multiwfn 为 {anion_name} 计算 RESP 电荷")
+
+        try:
+            qc_work_dir = Path(work_dir)
+
+            if not qc_work_dir.exists():
+                self.logger.error(f"工作目录不存在: {qc_work_dir}")
+                return None
+
+            # 查找fchk文件
+            fchk_files = list(qc_work_dir.glob("*.fchk"))
+            if not fchk_files:
+                self.logger.error(f"未找到 fchk 文件在目录: {qc_work_dir}")
+                return None
+
+            fchk_file = fchk_files[0]  # 使用找到的第一个fchk文件
+            self.logger.info(f"找到 fchk 文件: {fchk_file}")
+
+            # 创建Multiwfn输入文件 - 计算RESP电荷
+            multiwfn_input = qc_work_dir / "multiwfn_resp.txt"
+            chg_output = qc_work_dir / f"{Path(fchk_file).stem}.chg"
+
+            # Multiwfn输入命令：计算RESP电荷
+            multiwfn_commands = """7
+18
+1
+
+y
+0
+q
+"""
+
+            with open(multiwfn_input, 'w') as f:
+                f.write(multiwfn_commands)
+
+            # 运行Multiwfn
+            multiwfn_cmd = f"/public/software/Multiwfn_3.8_dev_bin_Linux/Multiwfn {fchk_file} < {multiwfn_input}"
+
+            self.logger.info(f"执行 Multiwfn 命令计算RESP电荷")
+            result = subprocess.run(multiwfn_cmd, shell=True, cwd=qc_work_dir,
+                                  capture_output=True, text=True, timeout=300)
+
+            if not chg_output.exists():
+                self.logger.error(f"❌ Multiwfn 未生成 chg 文件: {chg_output}")
+                self.logger.error(f"Multiwfn stderr: {result.stderr}")
+                return None
+
+            self.logger.info(f"✅ Multiwfn 成功生成 RESP 电荷文件: {chg_output}")
+
+            # 从.chg文件生成mol2文件
+            mol2_output = qc_work_dir / f"{Path(fchk_file).stem}.mol2"
+            if self._generate_mol2_from_chg(chg_output, mol2_output):
+                return str(mol2_output)
+            else:
+                return None
+
+        except Exception as e:
+            self.logger.error(f"运行 Multiwfn 异常: {e}")
+            return None
+
+    def _run_multiwfn_for_anion(self, qc_job_id: int, anion_name: str) -> str:
+        """运行 Multiwfn 生成 RESP 电荷"""
+        self.logger.info(f"运行 Multiwfn 为 {anion_name} 计算 RESP 电荷")
+
+        try:
+            # 首先获取 QC 任务信息，检查是否是复用的任务
+            # 递归查找原始任务 ID（处理多层复用的情况）
+            actual_qc_job_id = qc_job_id
+            visited_ids = set()
+
+            while True:
+                if actual_qc_job_id in visited_ids:
+                    self.logger.error(f"检测到循环复用: {visited_ids}")
+                    break
+                visited_ids.add(actual_qc_job_id)
+
+                try:
+                    endpoint = f"{self.api_base_url}/qc/jobs/{actual_qc_job_id}"
+                    response = requests.get(endpoint, headers=self.api_headers, timeout=30)
+                    if response.status_code == 200:
+                        qc_job_info = response.json()
+                    else:
+                        self.logger.warning(f"无法获取 QC 任务 {actual_qc_job_id} 的信息: {response.status_code}")
+                        break
+                except Exception as e:
+                    self.logger.warning(f"获取 QC 任务信息异常: {e}")
+                    break
+
+                # 如果是复用的任务，继续查找原始任务
+                if qc_job_info.get('is_reused') and qc_job_info.get('reused_from_job_id'):
+                    new_id = qc_job_info['reused_from_job_id']
+                    self.logger.info(f"QC 任务 {actual_qc_job_id} 是复用的，继续查找原始任务 {new_id}")
+                    actual_qc_job_id = new_id
+                else:
+                    # 找到了原始任务
+                    break
+
+            if actual_qc_job_id != qc_job_id:
+                self.logger.info(f"最终使用原始任务 {actual_qc_job_id} 的工作目录（从任务 {qc_job_id} 追溯）")
+
+            # 获取QC工作目录 - 尝试多种可能的目录名称
+            qc_work_base = Path(self.config['local']['qc_work_base_path'])
+
+            # 可能的目录名称列表（注意anion_name可能包含job_id）
+            possible_dirs = [
+                f"QC-{actual_qc_job_id}-{anion_name}",  # 直接使用anion_name
+                f"QC-{actual_qc_job_id}-anion_{anion_name}",
+                f"QC-{actual_qc_job_id}",
+            ]
+
+            # 如果 molecule_name 在 qc_job_info 中，也尝试使用它
+            if 'molecule_name' in qc_job_info:
+                possible_dirs.insert(0, f"QC-{actual_qc_job_id}-{qc_job_info['molecule_name']}")
+
+            qc_work_dir = None
+            for dir_name in possible_dirs:
+                test_dir = qc_work_base / dir_name
+                if test_dir.exists():
+                    qc_work_dir = test_dir
+                    self.logger.info(f"找到 QC 工作目录: {qc_work_dir}")
+                    break
+
+            if not qc_work_dir:
+                self.logger.error(f"未找到QC工作目录，尝试的目录: {possible_dirs}")
+                return None
+
+            # 查找fchk文件
+            fchk_files = list(qc_work_dir.glob("*.fchk"))
+            if not fchk_files:
+                self.logger.error(f"未找到 fchk 文件在目录: {qc_work_dir}")
+                return None
+
+            fchk_file = fchk_files[0]  # 使用找到的第一个fchk文件
+            self.logger.info(f"找到 fchk 文件: {fchk_file}")
+
+            # 创建Multiwfn输入文件 - 计算RESP电荷
+            multiwfn_input = qc_work_dir / "multiwfn_resp.txt"
+            chg_output = qc_work_dir / f"{Path(fchk_file).stem}.chg"
+
+            # Multiwfn输入命令：计算RESP电荷
+            multiwfn_commands = """7
+18
+1
+
+y
+0
+q
+"""
+
+            with open(multiwfn_input, 'w') as f:
+                f.write(multiwfn_commands)
+
+            # 运行Multiwfn
+            multiwfn_cmd = f"/public/software/Multiwfn_3.8_dev_bin_Linux/Multiwfn {fchk_file} < {multiwfn_input}"
+
+            self.logger.info(f"执行 Multiwfn 命令计算RESP电荷")
+            result = subprocess.run(multiwfn_cmd, shell=True, cwd=qc_work_dir,
+                                  capture_output=True, text=True, timeout=300)
+
+            if not chg_output.exists():
+                self.logger.error(f"❌ Multiwfn 未生成 chg 文件: {chg_output}")
+                self.logger.error(f"Multiwfn stderr: {result.stderr}")
+                return None
+
+            self.logger.info(f"✅ Multiwfn 成功生成 RESP 电荷文件: {chg_output}")
+
+            # 从.chg文件生成mol2文件
+            mol2_output = qc_work_dir / f"{Path(fchk_file).stem}.mol2"
+            if self._generate_mol2_from_chg(chg_output, mol2_output):
+                return str(mol2_output)
+            else:
+                return None
+
+        except Exception as e:
+            self.logger.error(f"运行 Multiwfn 异常: {e}")
+            return None
+
+    def _run_sobtop_for_anion(self, mol2_file: str, anion_name: str, work_dir: Path = None) -> bool:
+        """
+        运行 Sobtop 生成 GROMACS 拓扑和力场参数
+
+        Args:
+            mol2_file: mol2文件路径（不含电荷）
+            anion_name: 阴离子名称
+            work_dir: 工作目录（可选）
+
+        Returns:
+            成功返回True，失败返回False
+        """
+        self.logger.info(f"运行 Sobtop 为 {anion_name} 生成力场参数")
+
+        try:
+            mol2_path = Path(mol2_file)
+            if not mol2_path.exists():
+                self.logger.error(f"mol2 文件不存在: {mol2_file}")
+                return False
+
+            if work_dir is None:
+                work_dir = mol2_path.parent
+            else:
+                work_dir = Path(work_dir)
+
+            # 查找.fchk文件（Hessian矩阵来源）
+            fchk_files = list(work_dir.glob("*.fchk"))
+            if not fchk_files:
+                self.logger.error(f"未找到.fchk文件: {work_dir}")
+                return False
+
+            fchk_file = fchk_files[0]
+            self.logger.info(f"使用Hessian矩阵文件: {fchk_file.name}")
+
+            # 运行Sobtop（必须在Sobtop目录中运行以访问atomtype程序）
+            sobtop_dir = Path("/public/software/sobtop_1.0_dev5")
+            sobtop_exe = sobtop_dir / "sobtop"
+
+            if not sobtop_exe.exists():
+                self.logger.error(f"Sobtop可执行文件不存在: {sobtop_exe}")
+                return False
+
+            # 确保atomtype有执行权限
+            atomtype_exe = sobtop_dir / "atomtype"
+            if atomtype_exe.exists():
+                os.chmod(atomtype_exe, 0o755)
+
+            # 生成Sobtop输入命令
+            # 格式说明：
+            # 1. mol2文件路径
+            # 2. 2 (生成.gro文件)
+            # 3. 空行 (使用默认.gro输出路径)
+            # 4. -1 (设置力常数方法)
+            # 5. 4 (DRIH方法 - 对称刚性系统最优)
+            # 6. 1 (生成GROMACS拓扑文件)
+            # 7. 2 (分配GAFF然后UFF原子类型)
+            # 8. 2 (所有力常数从Hessian)
+            # 9. fchk文件路径
+            # 10. 空行 (使用默认.top输出路径)
+            # 11. 空行 (使用默认.itp输出路径)
+            # 12. 0 (退出)
+            sobtop_input = "\n".join([
+                str(mol2_path.absolute()),
+                "2",
+                "",
+                "-1",
+                "4",
+                "1",
+                "2",
+                "2",
+                str(fchk_file.absolute()),
+                "",
+                "",
+                "0"
+            ]) + "\n"
+
+            self.logger.info(f"执行 Sobtop 命令...")
+            self.logger.debug(f"Sobtop输入:\n{sobtop_input}")
+
+            # 使用Popen处理交互式输入
+            process = subprocess.Popen(
+                ["./sobtop"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(sobtop_dir)
+            )
+
+            try:
+                stdout, stderr = process.communicate(input=sobtop_input, timeout=300)
+                self.logger.debug(f"Sobtop输出:\n{stdout[-1000:]}")
+                if stderr:
+                    self.logger.debug(f"Sobtop错误:\n{stderr[-500:]}")
+            except subprocess.TimeoutExpired:
+                process.kill()
+                self.logger.error(f"Sobtop 执行超时")
+                return False
+
+            # 检查输出文件
+            # Sobtop会根据mol2文件名生成输出文件，如果mol2文件已经是*_nocharge.mol2，
+            # 则输出文件就是*_nocharge.itp和*_nocharge.top
+            itp_file = sobtop_dir / f"{mol2_path.stem}.itp"
+            top_file = sobtop_dir / f"{mol2_path.stem}.top"
+
+            if itp_file.exists() and top_file.exists():
+                # 复制文件到工作目录
+                import shutil
+                dest_itp = work_dir / f"{anion_name}.itp"
+                dest_top = work_dir / f"{anion_name}.top"
+                shutil.copy2(itp_file, dest_itp)
+                shutil.copy2(top_file, dest_top)
+
+                self.logger.info(f"✅ Sobtop 成功生成力场参数")
+                self.logger.info(f"   - {dest_itp.name}")
+                self.logger.info(f"   - {dest_top.name}")
+                return True
+            else:
+                self.logger.error(f"❌ Sobtop 未生成输出文件")
+                self.logger.error(f"预期文件: {itp_file}, {top_file}")
+                self.logger.error(f"Sobtop输出: {stdout[-500:]}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Sobtop 执行超时")
+            return False
+        except Exception as e:
+            self.logger.error(f"运行 Sobtop 异常: {e}", exc_info=True)
+            return False
+
+    def _parse_sobtop_itp(self, itp_file: Path) -> Optional[Dict]:
+        """
+        解析Sobtop生成的.itp文件，提取力场参数
+
+        Returns:
+            包含以下信息的字典：
+            {
+                'atom_types': {type_name: {'sigma': float, 'epsilon': float}},
+                'bonds': [{'atoms': (i,j), 'k': float, 'r0': float}],
+                'angles': [{'atoms': (i,j,k), 'k': float, 'theta0': float}],
+                'atom_charges': {atom_id: charge},
+                'atom_type_names': {atom_id: type_name}  # 新增：每个原子的类型名称
+            }
+        """
+        try:
+            if not itp_file.exists():
+                self.logger.error(f".itp文件不存在: {itp_file}")
+                return None
+
+            data = {
+                'atom_types': {},
+                'bonds': [],
+                'angles': [],
+                'atom_charges': {},
+                'atom_type_names': {}  # 新增：存储每个原子的类型名称
+            }
+
+            with open(itp_file, 'r') as f:
+                lines = f.readlines()
+
+            current_section = None
+            for i, line in enumerate(lines):
+                line_stripped = line.strip()
+
+                # 跳过注释和空行
+                if not line_stripped or line_stripped.startswith(';'):
+                    continue
+
+                # 识别section
+                if line_stripped.startswith('[') and line_stripped.endswith(']'):
+                    current_section = line_stripped[1:-1].strip()
+                    continue
+
+                # 解析atomtypes section
+                if current_section == 'atomtypes':
+                    parts = line_stripped.split()
+                    if len(parts) >= 6:
+                        try:
+                            atom_type = parts[0]
+                            # 格式: name at.num mass charge ptype sigma epsilon
+                            sigma = float(parts[5]) * 10  # nm -> Å
+                            epsilon = float(parts[6]) / 4.184  # kJ/mol -> kcal/mol
+                            data['atom_types'][atom_type] = {
+                                'sigma': sigma,
+                                'epsilon': epsilon
+                            }
+                        except (ValueError, IndexError):
+                            pass
+
+                # 解析atoms section（获取电荷和原子类型）
+                elif current_section == 'atoms':
+                    parts = line_stripped.split()
+                    if len(parts) >= 7:
+                        try:
+                            atom_id = int(parts[0])
+                            atom_type = parts[1]  # 原子类型（如 opls_800, c1, os, p2 等）
+                            charge = float(parts[6])
+                            data['atom_charges'][atom_id] = charge
+                            data['atom_type_names'][atom_id] = atom_type
+                        except (ValueError, IndexError):
+                            pass
+
+                # 解析bonds section
+                elif current_section == 'bonds' and not 'bond-bond' in line_stripped.lower():
+                    parts = line_stripped.split()
+                    if len(parts) >= 5:
+                        try:
+                            atom1 = int(parts[0])
+                            atom2 = int(parts[1])
+                            func = int(parts[2])
+                            if func == 1:  # 谐振子势
+                                r0 = float(parts[3]) * 10  # nm -> Å
+                                k = float(parts[4]) / 418.4  # kJ/mol/nm² -> kcal/mol/Å²
+                                data['bonds'].append({
+                                    'atoms': (atom1, atom2),
+                                    'k': k,
+                                    'r0': r0
+                                })
+                        except (ValueError, IndexError):
+                            pass
+
+                # 解析angles section（仅func=1的谐振子势）
+                elif current_section == 'angles' and 'cross' not in line_stripped.lower():
+                    parts = line_stripped.split()
+                    if len(parts) >= 6:
+                        try:
+                            atom1 = int(parts[0])
+                            atom2 = int(parts[1])
+                            atom3 = int(parts[2])
+                            func = int(parts[3])
+                            if func == 1:  # 谐振子势
+                                theta0 = float(parts[4])  # 度数
+                                k = float(parts[5]) / 4.184  # kJ/mol/rad² -> kcal/mol/rad²
+                                data['angles'].append({
+                                    'atoms': (atom1, atom2, atom3),
+                                    'k': k,
+                                    'theta0': theta0
+                                })
+                        except (ValueError, IndexError):
+                            pass
+
+            self.logger.info(f"✅ 成功解析.itp文件:")
+            self.logger.info(f"   - 原子类型: {len(data['atom_types'])}")
+            self.logger.info(f"   - 键: {len(data['bonds'])}")
+            self.logger.info(f"   - 角: {len(data['angles'])}")
+            self.logger.info(f"   - 原子电荷: {len(data['atom_charges'])}")
+            self.logger.info(f"   - 原子类型名称: {len(data['atom_type_names'])}")
+
+            return data
+
+        except Exception as e:
+            self.logger.error(f"解析.itp文件异常: {e}", exc_info=True)
+            return None
+
+    def _validate_pdb_coordinates(self, pdb_file: Path) -> bool:
+        """验证PDB文件中的坐标是否有效
+
+        检查项：
+        1. 坐标不能都是占位符（如 1.000, 1.000, Z）
+        2. 原子之间的距离应该合理（不能都太近）
+        3. 坐标应该是有效的浮点数（不能是NaN或Inf）
+        4. PDB格式是否正确（残基号在列23-26）
+        """
+        try:
+            coords = []
+            with open(pdb_file, 'r') as f:
+                for line_num, line in enumerate(f, 1):
+                    if line.startswith('ATOM'):
+                        try:
+                            x = float(line[30:38].strip())
+                            y = float(line[38:46].strip())
+                            z = float(line[46:54].strip())
+                            coords.append((x, y, z))
+
+                            # 验证残基号位置
+                            residue_num_str = line[22:26].strip()
+                            if not residue_num_str.isdigit():
+                                self.logger.error(f"❌ PDB文件第{line_num}行残基号格式错误: 列23-26应该是数字，实际是 '{residue_num_str}'")
+                                self.logger.error(f"   行内容: {repr(line)}")
+                                return False
+
+                        except (ValueError, IndexError) as e:
+                            self.logger.error(f"❌ PDB文件第{line_num}行坐标解析失败: {e}")
+                            self.logger.error(f"   行内容: {repr(line)}")
+                            return False
+
+            if not coords:
+                self.logger.error(f"❌ PDB文件中没有找到有效的坐标")
+                return False
+
+            # 检查是否都是占位符坐标（1.000, 1.000, Z）
+            placeholder_count = 0
+            for x, y, z in coords:
+                if abs(x - 1.0) < 0.001 and abs(y - 1.0) < 0.001:
+                    placeholder_count += 1
+
+            if placeholder_count == len(coords):
+                self.logger.error(f"❌ PDB文件中所有坐标都是占位符 (1.000, 1.000, Z)，这表示坐标未被正确填充")
+                return False
+
+            if placeholder_count > len(coords) * 0.5:
+                self.logger.warning(f"⚠️ PDB文件中超过50%的坐标是占位符，可能存在问题")
+
+            # 检查坐标范围是否合理
+            xs = [c[0] for c in coords]
+            ys = [c[1] for c in coords]
+            zs = [c[2] for c in coords]
+
+            x_range = max(xs) - min(xs)
+            y_range = max(ys) - min(ys)
+            z_range = max(zs) - min(zs)
+
+            # 分子应该有一定的大小（至少0.5 Å）
+            if x_range < 0.5 and y_range < 0.5 and z_range < 0.5:
+                self.logger.error(f"❌ 分子大小太小 (X: {x_range:.3f}, Y: {y_range:.3f}, Z: {z_range:.3f} Å)，可能坐标未被正确生成")
+                return False
+
+            self.logger.info(f"✅ PDB坐标验证通过: {len(coords)} 个原子，分子大小 X: {x_range:.3f}, Y: {y_range:.3f}, Z: {z_range:.3f} Å")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"验证PDB坐标异常: {e}")
+            return False
+
+    def _generate_pdb_file(self, pdb_file: Path, anion_name: str, coords_data: dict) -> bool:
+        """生成PDB文件
+
+        PDB 格式规范（参考 DFBOP.pdb）：
+        - 列 1-6: 记录名称（ATOM）
+        - 列 7-11: 原子序号（右对齐）
+        - 列 12: 空格
+        - 列 13-16: 原子名称（左对齐，4个字符）
+        - 列 17: 空格
+        - 列 18-20: 残基名称（右对齐，3个字符）
+        - 列 21-22: 空格
+        - 列 23-26: 残基序号（右对齐）
+        - 列 27-30: 空格
+        - 列 31-38: X 坐标（右对齐，8个字符，3位小数）
+        - 列 39-46: Y 坐标（右对齐，8个字符，3位小数）
+        - 列 47-54: Z 坐标（右对齐，8个字符，3位小数）
+        - 列 55-60: 占有度（1.00）
+        - 列 61-66: 温度因子（0.00）
+        - 列 67-76: 空格
+        - 列 77-78: 元素符号（右对齐，2个字符）
+        - 列 79-80: 电荷（空格）
+
+        注意：不包含链标识符，以确保与 Packmol 兼容
+        """
+        try:
+            # 确保残基名称不超过3个字符，以免影响列位置
+            residue_name = anion_name[:3].upper()
+
+            pdb_lines = [
+                f"REMARK   Materials Studio PDB file",
+                f"REMARK   Generated from QC calculation with RESP charges"
+            ]
+
+            for i, coord in enumerate(coords_data['coordinates'], 1):
+                element = coord['element']
+                x = coord['x']
+                y = coord['y']
+                z = coord['z']
+
+                # 构建 PDB ATOM 行，参考 DFBOP.pdb 的格式
+                # ATOM      1  O   DFB     1       3.502   1.454  -0.254  1.00  0.00           O
+                # 使用精确的列位置，确保与 Packmol 兼容
+                # 列位置：1-6(ATOM), 7-11(序号), 12(空), 13-16(原子名), 17(空), 18-20(残基名),
+                #        21-22(空), 23-26(残基号), 27-30(空), 31-38(X), 39-46(Y), 47-54(Z),
+                #        55-60(占有), 61-66(温因), 67-76(空), 77-78(元素), 79-80(电荷)
+
+                # 原子名称：4个字符（列13-16），格式为 " X  " (空格-元素-空格-空格)
+                # 对于单字母元素（如O, C, P, F等），格式为 " X  "
+                # 对于双字母元素（如Cl, Br等），格式为 "XX  "
+                if len(element) == 1:
+                    atom_name = f" {element}  "  # 单字母：空格-元素-空格-空格
+                else:
+                    atom_name = f"{element:<4s}"  # 双字母：左对齐4个字符
+
+                # 构建完整的PDB行
+                pdb_line = (
+                    f"ATOM  {i:5d} {atom_name} {residue_name:>3s}     {1:1d}    "
+                    f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {element:>2s}    "
+                )
+                pdb_lines.append(pdb_line)
+
+            pdb_lines.append("END")
+
+            # 使用 \r\n 行尾，与其他 PDB 文件保持一致
+            with open(pdb_file, 'w') as f:
+                for line in pdb_lines:
+                    f.write(line + "\r\n")
+
+            self.logger.info(f"✅ 生成PDB文件: {pdb_file.name} (残基名: {residue_name})")
+
+            # 验证生成的PDB文件
+            if not self._validate_pdb_coordinates(pdb_file):
+                self.logger.error(f"❌ PDB文件坐标验证失败，可能导致后续计算出错")
+                return False
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"生成PDB文件异常: {e}")
+            return False
+
+    def _generate_moltemplate_lt_file(self, lt_file: Path, anion_name: str, coords_data: dict,
+                                     force_field_data: Dict) -> bool:
+        """
+        生成标准moltemplate格式的.lt文件
+
+        格式参考: data/initial_salts/BF4.lt
+        """
+        try:
+            lt_lines = []
+
+            # 1. 分子定义头
+            lt_lines.append(f"{anion_name} {{")
+            lt_lines.append("")
+
+            # 2. Init section
+            lt_lines.append('  write_once("In Init") {')
+            lt_lines.append("    atom_style full")
+            lt_lines.append("  }")
+            lt_lines.append("")
+
+            # 3. Settings section - 合并所有设置到一个块中
+            # 创建原子类型映射：Sobtop类型 -> LAMMPS原子类型
+            # 保持不同的Sobtop类型对应不同的LAMMPS类型，避免参数冲突
+            atom_type_map = {
+                'os': 'os',   # 氧原子(特殊类型) -> os
+                'o': 'o',     # 氧原子 -> o
+                'c1': 'c1',   # 碳原子(特殊类型) -> c1
+                'c': 'c',     # 碳原子 -> c
+                'p2': 'p2',   # 磷原子(特殊类型) -> p2
+                'p': 'p',     # 磷原子 -> p
+                'f': 'f',     # 氟原子 -> f
+                's': 's',     # 硫原子 -> s
+                'n': 'n',     # 氮原子 -> n
+                'b': 'b',     # 硼原子 -> b
+                'cl': 'cl',   # 氯原子 -> cl
+                'br': 'br',   # 溴原子 -> br
+                'i': 'i',     # 碘原子 -> i
+            }
+
+            # 3.1 pair_coeff - 在单独的 write_once 块中
+            lt_lines.append('  write_once("In Settings") {')
+            for atom_type, params in force_field_data['atom_types'].items():
+                # 获取LAMMPS元素符号，如果映射中没有则使用原始类型名
+                element = atom_type_map.get(atom_type.lower(), atom_type.lower())
+                lt_lines.append(
+                    f"    pair_coeff @atom:{element} @atom:{element} "
+                    f"{params['epsilon']:.6f} {params['sigma']:.6f}"
+                )
+            lt_lines.append("  }")
+            lt_lines.append("")
+
+            # 3.2 bond_coeff - 在单独的 write_once 块中
+            if force_field_data['bonds']:
+                lt_lines.append('  write_once("In Settings") {')
+                # 按键类型分组并计算平均值
+                bond_types = {}
+                for bond in force_field_data['bonds']:
+                    # 创建键类型标识（排序原子类型以确保一致性）
+                    key = f"bond_{len(bond_types) + 1}"
+                    if key not in bond_types:
+                        bond_types[key] = []
+                    bond_types[key].append(bond)
+
+                for bond_type, bonds in bond_types.items():
+                    # 计算平均值
+                    avg_k = sum(b['k'] for b in bonds) / len(bonds)
+                    avg_r0 = sum(b['r0'] for b in bonds) / len(bonds)
+                    lt_lines.append(
+                        f"    bond_coeff @bond:{bond_type} {avg_k:.6f} {avg_r0:.6f}"
+                    )
+                lt_lines.append("  }")
+                lt_lines.append("")
+
+            # 3.3 angle_coeff - 在单独的 write_once 块中
+            if force_field_data['angles']:
+                lt_lines.append('  write_once("In Settings") {')
+                # 按角类型分组并计算平均值
+                angle_types = {}
+                for angle in force_field_data['angles']:
+                    key = f"angle_{len(angle_types) + 1}"
+                    if key not in angle_types:
+                        angle_types[key] = []
+                    angle_types[key].append(angle)
+
+                for angle_type, angles in angle_types.items():
+                    # 计算平均值
+                    avg_k = sum(a['k'] for a in angles) / len(angles)
+                    avg_theta0 = sum(a['theta0'] for a in angles) / len(angles)
+                    lt_lines.append(
+                        f"    angle_coeff @angle:{angle_type} {avg_k:.6f} {avg_theta0:.6f}"
+                    )
+                lt_lines.append("  }")
+                lt_lines.append("")
+
+            # 6. Data Masses section
+            lt_lines.append('  write_once("Data Masses") {')
+            # 获取原子质量
+            ATOMIC_MASSES = {
+                'H': 1.008, 'C': 12.011, 'N': 14.007, 'O': 15.999,
+                'F': 18.998, 'P': 30.974, 'S': 32.065, 'Cl': 35.453,
+                'Br': 79.904, 'I': 126.904, 'B': 10.811, 'Li': 6.941,
+                'Na': 22.990, 'K': 39.098, 'Mg': 24.305, 'Ca': 40.078,
+                'Zn': 65.409, 'Al': 26.982
+            }
+
+            # 收集实际使用的LAMMPS原子类型
+            lammps_atom_types_used = set()
+            for atom_type in force_field_data['atom_types'].keys():
+                lammps_type = atom_type_map.get(atom_type.lower(), atom_type.lower())
+                lammps_atom_types_used.add(lammps_type)
+
+            # 为每个LAMMPS原子类型添加质量
+            for lammps_type in sorted(lammps_atom_types_used):
+                # 从LAMMPS原子类型推断元素符号（特殊处理os等类型）
+                if lammps_type.startswith('os'):
+                    element_symbol = 'O'  # os是氧原子的特殊类型
+                elif lammps_type.startswith('c'):
+                    element_symbol = 'C'  # c1等是碳原子的特殊类型
+                elif lammps_type.startswith('p'):
+                    element_symbol = 'P'  # p2等是磷原子的特殊类型
+                else:
+                    # 其他情况：去掉数字后缀
+                    element_symbol = ''.join(c for c in lammps_type if c.isalpha()).upper()
+
+                mass = ATOMIC_MASSES.get(element_symbol, 12.0)
+                lt_lines.append(f"    @atom:{lammps_type} {mass:.3f}")
+
+            lt_lines.append("  }")
+            lt_lines.append("")
+
+            # 7. List_salt section（用户特别要求）
+            lt_lines.append('  write_once("In List_salt") {')
+            # 对于group行使用LAMMPS原子类型（@atom:os @atom:c1等）
+            lt_lines.append(f"    group        {anion_name}           type   @atom:{' @atom:'.join(sorted(lammps_atom_types_used))}")
+            # 对于variable行：每个LAMMPS原子类型对应一个元素符号
+            # 参考DFOB: os和o都是氧原子，所以variable行有两个O
+            element_list = []
+            for lammps_type in sorted(lammps_atom_types_used):
+                if lammps_type.startswith('os'):
+                    element_list.append('O')
+                elif lammps_type.startswith('c'):
+                    element_list.append('C')
+                elif lammps_type.startswith('p'):
+                    element_list.append('P')
+                else:
+                    element_symbol = ''.join(c for c in lammps_type if c.isalpha()).upper()
+                    element_list.append(element_symbol)
+
+            lt_lines.append(f"    variable     {anion_name}_list      index  \"{' '.join(element_list)}\"")
+            lt_lines.append("  }")
+            lt_lines.append("")
+
+            # 8. Data Atoms section
+            lt_lines.append('  write("Data Atoms") {')
+            # 添加注释说明原子类型的区分
+            lt_lines.append("    # 这里已经按环境区分好原子类型")
+            for i, coord in enumerate(coords_data['coordinates'], 1):
+                element = coord['element']
+
+                # 从 force_field_data 中获取该原子的 Sobtop 类型名称
+                # atom_type_names 的键是原子索引（从1开始）
+                sobtop_type = force_field_data['atom_type_names'].get(i, element.lower())
+
+                # 将 Sobtop 类型转换为 LAMMPS 原子类型
+                lammps_atom_type = atom_type_map.get(sobtop_type.lower(), sobtop_type.lower())
+                charge = coord.get('charge', 0.0)
+
+                # 构建原子行，使用大写的原子名称（如 O_1, C_2）
+                atom_id = f"{element}_{i}"
+                lt_lines.append(
+                    f"    $atom:{atom_id} $mol:m1 @atom:{lammps_atom_type} {charge:.6f} "
+                    f"{coord['x']:.6f} {coord['y']:.6f} {coord['z']:.6f}"
+                )
+            lt_lines.append("  }")
+            lt_lines.append("")
+
+            # 9. Data Bonds section
+            if force_field_data['bonds']:
+                lt_lines.append('  write("Data Bonds") {')
+                # 添加注释说明
+                lt_lines.append("    # 这里保留了原来的 bond 类型和连接方式")
+                num_coords = len(coords_data['coordinates'])
+                for bond_idx, bond in enumerate(force_field_data['bonds'], 1):
+                    atom1, atom2 = bond['atoms']
+                    # 安全检查：确保原子索引在有效范围内
+                    if atom1 < 1 or atom1 > num_coords or atom2 < 1 or atom2 > num_coords:
+                        self.logger.warning(f"跳过无效的键: {atom1}-{atom2} (总原子数: {num_coords})")
+                        continue
+                    # 获取原子元素符号（用于原子ID）
+                    elem1 = coords_data['coordinates'][atom1-1]['element']
+                    elem2 = coords_data['coordinates'][atom2-1]['element']
+                    # 使用大写的原子名称（如 O_1, C_2）
+                    lt_lines.append(
+                        f"    $bond:b{bond_idx} @bond:bond_1 $atom:{elem1}_{atom1} $atom:{elem2}_{atom2}"
+                    )
+                lt_lines.append("  }")
+                lt_lines.append("")
+
+            # 10. Data Angles section
+            if force_field_data['angles']:
+                lt_lines.append('  write("Data Angles") {')
+                # 添加注释说明
+                lt_lines.append("    # 同样角也保持原来的定义，只是原子类型已经修正")
+                num_coords = len(coords_data['coordinates'])
+                for angle_idx, angle in enumerate(force_field_data['angles'], 1):
+                    atom1, atom2, atom3 = angle['atoms']
+                    # 安全检查：确保原子索引在有效范围内
+                    if atom1 < 1 or atom1 > num_coords or atom2 < 1 or atom2 > num_coords or atom3 < 1 or atom3 > num_coords:
+                        self.logger.warning(f"跳过无效的角: {atom1}-{atom2}-{atom3} (总原子数: {num_coords})")
+                        continue
+                    # 获取原子元素符号（用于原子ID）
+                    elem1 = coords_data['coordinates'][atom1-1]['element']
+                    elem2 = coords_data['coordinates'][atom2-1]['element']
+                    elem3 = coords_data['coordinates'][atom3-1]['element']
+                    # 使用大写的原子名称（如 O_1, C_2）
+                    lt_lines.append(
+                        f"    $angle:a{angle_idx} @angle:angle_1 $atom:{elem1}_{atom1} "
+                        f"$atom:{elem2}_{atom2} $atom:{elem3}_{atom3}"
+                    )
+                lt_lines.append("  }")
+                lt_lines.append("")
+
+            # 11. 分子定义结尾
+            lt_lines.append("}")
+
+            # 写入文件
+            with open(lt_file, 'w') as f:
+                f.write("\n".join(lt_lines) + "\n")
+
+            self.logger.info(f"✅ 生成moltemplate .lt文件: {lt_file.name}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"生成.lt文件异常: {e}", exc_info=True)
+            return False
+
+    def _convert_to_lammps_format(self, mol2_file: str, anion_name: str, coords_data: dict) -> tuple:
+        """
+        从mol2文件和Sobtop生成的力场参数生成 LAMMPS 格式和 PDB 文件
+
+        工作流程：
+        1. 运行Sobtop从Hessian矩阵生成力场参数
+        2. 解析Sobtop生成的.itp文件获取力场参数
+        3. 生成标准moltemplate格式的.lt文件
+        4. 生成PDB文件
+        """
+        self.logger.info(f"转换 {anion_name} 为 LAMMPS 格式（使用Sobtop力场参数）")
+
+        try:
+            mol2_path = Path(mol2_file)
+            if not mol2_path.exists():
+                self.logger.error(f"mol2 文件不存在: {mol2_file}")
+                return None, None
+
+            work_dir = mol2_path.parent
+            lt_file = work_dir / f"{anion_name}.lt"
+            pdb_file = work_dir / f"{anion_name}.pdb"
+            itp_file = work_dir / f"{anion_name}.itp"
+            top_file = work_dir / f"{anion_name}.top"
+
+            # 步骤1: 运行Sobtop生成力场参数
+            self.logger.info(f"运行Sobtop生成 {anion_name} 的力场参数...")
+            if not self._run_sobtop_for_anion(mol2_file, anion_name, work_dir):
+                self.logger.error(f"Sobtop运行失败")
+                return None, None
+
+            # 步骤2: 解析Sobtop生成的.itp文件
+            self.logger.info(f"解析Sobtop生成的力场参数...")
+            force_field_data = self._parse_sobtop_itp(itp_file)
+            if not force_field_data:
+                self.logger.error(f"解析.itp文件失败")
+                return None, None
+
+            # 步骤3: 生成PDB文件
+            self.logger.info(f"生成PDB文件...")
+            self._generate_pdb_file(pdb_file, anion_name, coords_data)
+
+            # 步骤4: 生成标准moltemplate格式的.lt文件
+            self.logger.info(f"生成LAMMPS .lt文件...")
+            self._generate_moltemplate_lt_file(lt_file, anion_name, coords_data, force_field_data)
+
+            self.logger.info(f"✅ 成功生成 LAMMPS 格式文件: {lt_file}, {pdb_file}")
+            return str(lt_file), str(pdb_file)
+
+        except Exception as e:
+            self.logger.error(f"转换为 LAMMPS 格式异常: {e}", exc_info=True)
+            return None, None
+
+    def _upload_anion_results(self, anion_job_id: int, anion_name: str, mol2_file: str,
+                             gromacs_top: str, lt_file: str, pdb_file: str) -> bool:
+        """上传阴离子结果文件并复制到initial_salts目录，然后注册到数据库"""
+        self.logger.info(f"上传 {anion_name} 的结果文件")
+
+        try:
+            import shutil
+            # 复制文件到initial_salts目录
+            initial_salts_dir = Path(self.config['local']['qc_work_base_path']).parent / "initial_salts"
+            initial_salts_dir.mkdir(exist_ok=True)
+
+            files_to_copy = []
+            dest_lt = None
+            dest_pdb = None
+
+            if lt_file and Path(lt_file).exists():
+                dest_lt = initial_salts_dir / f"{anion_name}.lt"
+                shutil.copy2(lt_file, dest_lt)
+                files_to_copy.append(f"{anion_name}.lt")
+
+            if pdb_file and Path(pdb_file).exists():
+                dest_pdb = initial_salts_dir / f"{anion_name}.pdb"
+                shutil.copy2(pdb_file, dest_pdb)
+                files_to_copy.append(f"{anion_name}.pdb")
+
+            # 上传到COS（可选）
+            cos_files = []
+            if self.storage_type == 'cos':
+                # 获取 anion 结果前缀
+                anion_prefix = self.config['cos'].get('anion_result_prefix', 'Anion_results/')
+                for file_path in [mol2_file, gromacs_top, lt_file, pdb_file]:
+                    if file_path and Path(file_path).exists():
+                        file_name = Path(file_path).name
+                        cos_key = f"{anion_prefix}{anion_job_id}/{file_name}"
+
+                        try:
+                            self.cos_client.upload_file(
+                                Bucket=self.cos_bucket,
+                                LocalFilePath=file_path,
+                                Key=cos_key
+                            )
+                            cos_files.append(file_name)
+                            self.logger.info(f"✅ 上传到COS成功: {file_name}")
+                        except Exception as e:
+                            self.logger.warning(f"上传到COS失败 {file_name}: {e}")
+
+            self.logger.info(f"✅ 阴离子 {anion_name} 结果文件处理完成:")
+            self.logger.info(f"   - 复制到initial_salts: {files_to_copy}")
+            self.logger.info(f"   - 上传到COS: {cos_files}")
+
+            # 注册阴离子到数据库
+            if len(files_to_copy) > 0:
+                self.logger.info(f"注册阴离子 {anion_name} 到数据库...")
+                if self._register_anion_in_database(anion_job_id, anion_name, str(dest_lt) if dest_lt else None, str(dest_pdb) if dest_pdb else None):
+                    self.logger.info(f"✅ 阴离子 {anion_name} 已成功注册到数据库")
+                    return True
+                else:
+                    self.logger.error(f"❌ 阴离子 {anion_name} 注册到数据库失败")
+                    return False
+            else:
+                self.logger.warning(f"⚠️ 没有文件被复制到initial_salts目录")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"上传阴离子结果文件异常: {e}")
+            return False
+
+    def _register_anion_in_database(self, anion_job_id: int, anion_name: str, lt_path: str, pdb_path: str) -> bool:
+        """
+        调用后端API注册阴离子到AnionLibrary数据库表
+        """
+        try:
+            endpoint = f"{self.api_base_url}/workers/anion_generation/{anion_job_id}/register"
+            payload = {
+                "anion_name": anion_name,
+                "lt_path": lt_path,
+                "pdb_path": pdb_path
+            }
+
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"✅ 阴离子 {anion_name} 注册成功: {result.get('message', '')}")
+                return True
+            else:
+                self.logger.error(f"❌ 阴离子注册失败: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"调用阴离子注册API异常: {e}")
+            return False
+
+    def _sync_anion_library_with_filesystem(self):
+        """
+        同步 initial_salts 文件夹和数据库中的阴离子库
+
+        功能：
+        1. 扫描 initial_salts 文件夹中的所有 .lt 和 .pdb 文件
+        2. 删除数据库中存在但文件已被删除的阴离子记录
+        3. 添加文件夹中存在但数据库中没有的阴离子记录
+        """
+        try:
+            self.logger.info("=" * 80)
+            self.logger.info("开始同步 initial_salts 文件夹和数据库...")
+
+            # 获取 initial_salts 目录
+            initial_salts_dir = Path(self.config['local']['qc_work_base_path']).parent / "initial_salts"
+            if not initial_salts_dir.exists():
+                self.logger.warning(f"initial_salts 目录不存在: {initial_salts_dir}")
+                return
+
+            # 扫描文件夹中的阴离子（需要同时有 .lt 和 .pdb 文件）
+            filesystem_anions = {}  # {anion_name: {'lt': path, 'pdb': path}}
+
+            for lt_file in initial_salts_dir.glob("*.lt"):
+                anion_name = lt_file.stem
+                pdb_file = initial_salts_dir / f"{anion_name}.pdb"
+
+                if pdb_file.exists():
+                    filesystem_anions[anion_name] = {
+                        'lt': str(lt_file),
+                        'pdb': str(pdb_file)
+                    }
+
+            self.logger.info(f"文件系统中找到 {len(filesystem_anions)} 个阴离子（同时有.lt和.pdb文件）")
+
+            # 从数据库获取所有阴离子记录
+            try:
+                endpoint = f"{self.api_base_url}/forcefield/anions/library"
+                response = requests.get(
+                    endpoint,
+                    headers=self.api_headers,
+                    timeout=30
+                )
+
+                if response.status_code != 200:
+                    self.logger.error(f"获取数据库阴离子列表失败: {response.status_code}")
+                    return
+
+                db_anions = response.json().get('anions', [])
+                self.logger.info(f"数据库中找到 {len(db_anions)} 个阴离子记录")
+
+            except Exception as e:
+                self.logger.error(f"获取数据库阴离子列表异常: {e}")
+                return
+
+            # 检查需要删除的记录（数据库中有但文件系统中没有）
+            deleted_count = 0
+            for db_anion in db_anions:
+                anion_name = db_anion['anion_name']
+
+                if anion_name not in filesystem_anions:
+                    # 文件已被删除，需要从数据库中删除
+                    self.logger.warning(f"⚠️  阴离子 {anion_name} 的文件已被删除，从数据库中移除...")
+
+                    if self._delete_anion_from_database(anion_name):
+                        deleted_count += 1
+                        self.logger.info(f"✅ 已从数据库删除: {anion_name}")
+                    else:
+                        self.logger.error(f"❌ 删除失败: {anion_name}")
+
+            # 检查需要添加的记录（文件系统中有但数据库中没有）
+            db_anion_names = {anion['anion_name'] for anion in db_anions}
+            added_count = 0
+
+            for anion_name, files in filesystem_anions.items():
+                if anion_name not in db_anion_names:
+                    # 文件存在但数据库中没有记录，需要添加
+                    self.logger.info(f"📝 发现新阴离子文件 {anion_name}，添加到数据库...")
+
+                    if self._add_anion_to_database(anion_name, files['lt'], files['pdb']):
+                        added_count += 1
+                        self.logger.info(f"✅ 已添加到数据库: {anion_name}")
+                    else:
+                        self.logger.error(f"❌ 添加失败: {anion_name}")
+
+            # 刷新前端缓存
+            if deleted_count > 0 or added_count > 0:
+                self.logger.info("刷新前端离子缓存...")
+                self._refresh_frontend_ions_cache()
+
+            self.logger.info(f"同步完成: 删除 {deleted_count} 个，添加 {added_count} 个")
+            self.logger.info("=" * 80)
+
+        except Exception as e:
+            self.logger.error(f"同步阴离子库异常: {e}", exc_info=True)
+
+    def _delete_anion_from_database(self, anion_name: str) -> bool:
+        """
+        从数据库中删除阴离子记录（软删除）
+        """
+        try:
+            endpoint = f"{self.api_base_url}/forcefield/anions/{anion_name}"
+            response = requests.delete(
+                endpoint,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                return True
+            else:
+                self.logger.error(f"删除阴离子失败: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"调用删除阴离子API异常: {e}")
+            return False
+
+    def _add_anion_to_database(self, anion_name: str, lt_path: str, pdb_path: str) -> bool:
+        """
+        添加阴离子到数据库
+        """
+        try:
+            endpoint = f"{self.api_base_url}/forcefield/anions/manual-register"
+            payload = {
+                "anion_name": anion_name,
+                "display_name": anion_name,
+                "charge": -1,
+                "lt_path": lt_path,
+                "pdb_path": pdb_path,
+                "source": "manual"
+            }
+
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code in [200, 201]:
+                return True
+            else:
+                self.logger.error(f"添加阴离子失败: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"调用添加阴离子API异常: {e}")
+            return False
+
+    def _refresh_frontend_ions_cache(self):
+        """
+        刷新前端离子缓存
+        """
+        try:
+            endpoint = f"{self.api_base_url}/electrolytes/refresh-ions"
+            response = requests.post(
+                endpoint,
+                headers=self.api_headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"✅ 前端缓存刷新成功: {result.get('message', '')}")
+                return True
+            else:
+                self.logger.error(f"刷新前端缓存失败: {response.status_code}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"刷新前端缓存异常: {e}")
+            return False
+
+
+def main():
+    """主函数"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description='混合云轮询 Worker')
+    parser.add_argument(
+        '--config',
+        default='deployment/polling_worker_config.yaml',
+        help='配置文件路径'
+    )
+    args = parser.parse_args()
+
+    # 创建并运行 Worker
+    worker = PollingWorker(config_path=args.config)
+    worker.run()
+
+
+if __name__ == '__main__':
+    main()
+

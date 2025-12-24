@@ -1,0 +1,142 @@
+DFBOP {
+
+  write_once("In Init") {
+    atom_style full
+  }
+
+  write_once("In Settings") {
+    pair_coeff @atom:o @atom:o 0.210000 2.959922
+    pair_coeff @atom:c @atom:c 0.086000 3.399670
+    pair_coeff @atom:os @atom:os 0.170000 3.000012
+    pair_coeff @atom:p5 @atom:p5 0.200000 3.741775
+    pair_coeff @atom:f @atom:f 0.061000 3.118146
+  }
+
+  write_once("In Settings") {
+    bond_coeff @bond:bond_1 1897.854446 1.209570
+    bond_coeff @bond:bond_2 811.108509 1.336320
+    bond_coeff @bond:bond_3 395.056644 1.550920
+    bond_coeff @bond:bond_4 243.003346 1.782970
+    bond_coeff @bond:bond_5 628.766730 1.628860
+    bond_coeff @bond:bond_6 243.090344 1.782880
+    bond_coeff @bond:bond_7 242.735421 1.783180
+    bond_coeff @bond:bond_8 243.225621 1.782770
+    bond_coeff @bond:bond_9 811.078872 1.336340
+    bond_coeff @bond:bond_10 1897.962715 1.209560
+    bond_coeff @bond:bond_11 811.401769 1.336270
+    bond_coeff @bond:bond_12 1897.772228 1.209580
+    bond_coeff @bond:bond_13 395.121415 1.550900
+    bond_coeff @bond:bond_14 1897.972036 1.209560
+    bond_coeff @bond:bond_15 810.845602 1.336380
+  }
+
+  write_once("In Settings") {
+    angle_coeff @angle:angle_1 92.098877 124.701000
+    angle_coeff @angle:angle_2 81.671104 124.088000
+    angle_coeff @angle:angle_3 52.487978 111.198000
+    angle_coeff @angle:angle_4 42.728920 113.853000
+    angle_coeff @angle:angle_5 31.221056 91.229000
+    angle_coeff @angle:angle_6 17.932930 89.815000
+    angle_coeff @angle:angle_7 17.957211 90.121000
+    angle_coeff @angle:angle_8 14.483948 177.540000
+    angle_coeff @angle:angle_9 31.236831 91.232000
+    angle_coeff @angle:angle_10 31.217519 91.225000
+    angle_coeff @angle:angle_11 31.243427 91.231000
+    angle_coeff @angle:angle_12 14.483836 177.543000
+    angle_coeff @angle:angle_13 17.947543 90.146000
+    angle_coeff @angle:angle_14 17.932866 89.812000
+    angle_coeff @angle:angle_15 42.739555 113.855000
+    angle_coeff @angle:angle_16 52.488934 111.199000
+    angle_coeff @angle:angle_17 81.671272 124.090000
+    angle_coeff @angle:angle_18 92.103489 124.698000
+    angle_coeff @angle:angle_19 42.728537 113.850000
+    angle_coeff @angle:angle_20 92.100526 124.704000
+    angle_coeff @angle:angle_21 52.490870 111.201000
+    angle_coeff @angle:angle_22 81.679254 124.083000
+    angle_coeff @angle:angle_23 81.669479 124.093000
+    angle_coeff @angle:angle_24 52.484704 111.198000
+    angle_coeff @angle:angle_25 92.103776 124.696000
+    angle_coeff @angle:angle_26 42.742806 113.860000
+  }
+
+  write_once("Data Masses") {
+    @atom:c 12.011
+    @atom:f 18.998
+    @atom:o 15.999
+    @atom:os 15.999
+    @atom:p5 30.974
+  }
+
+  write_once("In List_salt") {
+    group        DFBOP           type   @atom:c @atom:f @atom:o @atom:os @atom:p5
+    variable     DFBOP_list      index  "C F O O P"
+  }
+
+  write("Data Atoms") {
+    # 这里已经按环境区分好原子类型
+    $atom:O_1 $mol:m1 @atom:o -0.562150 3.501653 1.453578 -0.254212
+    $atom:C_2 $mol:m1 @atom:c 0.627688 2.504611 0.775563 -0.157938
+    $atom:O_3 $mol:m1 @atom:os -0.357506 1.262089 1.258648 -0.065563
+    $atom:P_4 $mol:m1 @atom:p5 0.322326 0.000046 -0.000224 -0.027409
+    $atom:F_5 $mol:m1 @atom:f -0.155022 -0.000145 -0.000127 1.601447
+    $atom:O_6 $mol:m1 @atom:os -0.357456 1.262342 -1.258719 -0.065504
+    $atom:C_7 $mol:m1 @atom:c 0.627443 2.504785 -0.775357 -0.157644
+    $atom:O_8 $mol:m1 @atom:o -0.561985 3.502014 -1.453220 -0.252935
+    $atom:O_9 $mol:m1 @atom:os -0.357086 -1.262226 1.258713 -0.065760
+    $atom:C_10 $mol:m1 @atom:c 0.627240 -2.504671 0.775497 -0.157665
+    $atom:O_11 $mol:m1 @atom:o -0.561887 -3.501939 1.453367 -0.252734
+    $atom:C_12 $mol:m1 @atom:c 0.626990 -2.504670 -0.775398 -0.158138
+    $atom:O_13 $mol:m1 @atom:o -0.561762 -3.501744 -1.453374 -0.254198
+    $atom:O_14 $mol:m1 @atom:os -0.356835 -1.262155 -1.258657 -0.065791
+  }
+
+  write("Data Bonds") {
+    # 这里保留了原来的 bond 类型和连接方式
+    $bond:b1 @bond:bond_1 $atom:O_1 $atom:C_2
+    $bond:b2 @bond:bond_1 $atom:C_2 $atom:O_3
+    $bond:b3 @bond:bond_1 $atom:C_2 $atom:C_7
+    $bond:b4 @bond:bond_1 $atom:O_3 $atom:P_4
+    $bond:b5 @bond:bond_1 $atom:P_4 $atom:F_5
+    $bond:b6 @bond:bond_1 $atom:P_4 $atom:O_6
+    $bond:b7 @bond:bond_1 $atom:P_4 $atom:O_9
+    $bond:b8 @bond:bond_1 $atom:P_4 $atom:O_14
+    $bond:b9 @bond:bond_1 $atom:O_6 $atom:C_7
+    $bond:b10 @bond:bond_1 $atom:C_7 $atom:O_8
+    $bond:b11 @bond:bond_1 $atom:O_9 $atom:C_10
+    $bond:b12 @bond:bond_1 $atom:C_10 $atom:O_11
+    $bond:b13 @bond:bond_1 $atom:C_10 $atom:C_12
+    $bond:b14 @bond:bond_1 $atom:C_12 $atom:O_13
+    $bond:b15 @bond:bond_1 $atom:C_12 $atom:O_14
+  }
+
+  write("Data Angles") {
+    # 同样角也保持原来的定义，只是原子类型已经修正
+    $angle:a1 @angle:angle_1 $atom:O_1 $atom:C_2 $atom:O_3
+    $angle:a2 @angle:angle_1 $atom:O_1 $atom:C_2 $atom:C_7
+    $angle:a3 @angle:angle_1 $atom:O_3 $atom:C_2 $atom:C_7
+    $angle:a4 @angle:angle_1 $atom:C_2 $atom:O_3 $atom:P_4
+    $angle:a5 @angle:angle_1 $atom:O_3 $atom:P_4 $atom:F_5
+    $angle:a6 @angle:angle_1 $atom:O_3 $atom:P_4 $atom:O_6
+    $angle:a7 @angle:angle_1 $atom:O_3 $atom:P_4 $atom:O_9
+    $angle:a8 @angle:angle_1 $atom:O_3 $atom:P_4 $atom:O_14
+    $angle:a9 @angle:angle_1 $atom:F_5 $atom:P_4 $atom:O_6
+    $angle:a10 @angle:angle_1 $atom:F_5 $atom:P_4 $atom:O_9
+    $angle:a11 @angle:angle_1 $atom:F_5 $atom:P_4 $atom:O_14
+    $angle:a12 @angle:angle_1 $atom:O_6 $atom:P_4 $atom:O_9
+    $angle:a13 @angle:angle_1 $atom:O_6 $atom:P_4 $atom:O_14
+    $angle:a14 @angle:angle_1 $atom:O_9 $atom:P_4 $atom:O_14
+    $angle:a15 @angle:angle_1 $atom:P_4 $atom:O_6 $atom:C_7
+    $angle:a16 @angle:angle_1 $atom:C_2 $atom:C_7 $atom:O_6
+    $angle:a17 @angle:angle_1 $atom:C_2 $atom:C_7 $atom:O_8
+    $angle:a18 @angle:angle_1 $atom:O_6 $atom:C_7 $atom:O_8
+    $angle:a19 @angle:angle_1 $atom:P_4 $atom:O_9 $atom:C_10
+    $angle:a20 @angle:angle_1 $atom:O_9 $atom:C_10 $atom:O_11
+    $angle:a21 @angle:angle_1 $atom:O_9 $atom:C_10 $atom:C_12
+    $angle:a22 @angle:angle_1 $atom:O_11 $atom:C_10 $atom:C_12
+    $angle:a23 @angle:angle_1 $atom:C_10 $atom:C_12 $atom:O_13
+    $angle:a24 @angle:angle_1 $atom:C_10 $atom:C_12 $atom:O_14
+    $angle:a25 @angle:angle_1 $atom:O_13 $atom:C_12 $atom:O_14
+    $angle:a26 @angle:angle_1 $atom:P_4 $atom:O_14 $atom:C_12
+  }
+
+}

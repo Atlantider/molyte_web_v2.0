@@ -1,0 +1,329 @@
+FBS- {
+
+  write_once("In Init") {
+    atom_style full
+  }
+
+  write_once("In Settings") {
+    pair_coeff @atom:os @atom:os 0.170000 3.000012
+    pair_coeff @atom:s @atom:s 0.250000 3.563595
+    pair_coeff @atom:o @atom:o 0.210000 2.959922
+    pair_coeff @atom:c1 @atom:c1 0.210000 3.399670
+    pair_coeff @atom:f @atom:f 0.061000 3.118146
+
+
+    bond_coeff @bond:bond_1 1934.407266 1.481190
+    bond_coeff @bond:bond_2 907.539914 2.506330
+    bond_coeff @bond:bond_3 911.553298 2.505220
+    bond_coeff @bond:bond_4 971.551386 2.652520
+    bond_coeff @bond:bond_5 646.948375 3.815400
+    bond_coeff @bond:bond_6 252.888384 2.976450
+    bond_coeff @bond:bond_7 1099.297562 3.382010
+    bond_coeff @bond:bond_8 378.652247 3.971370
+    bond_coeff @bond:bond_9 657.022467 4.575200
+    bond_coeff @bond:bond_10 1049.850621 3.382890
+    bond_coeff @bond:bond_11 186.207194 2.886280
+    bond_coeff @bond:bond_12 767.588432 4.713950
+    bond_coeff @bond:bond_13 1204.664914 3.664900
+    bond_coeff @bond:bond_14 610.622132 4.663720
+    bond_coeff @bond:bond_15 314.957696 2.904830
+    bond_coeff @bond:bond_16 494.046606 4.492940
+
+    angle_coeff @angle:angle_1 583.339388 32.166000
+    angle_coeff @angle:angle_2 443.928059 32.154000
+    angle_coeff @angle:angle_3 152.279183 44.707000
+    angle_coeff @angle:angle_4 105.081883 32.090000
+    angle_coeff @angle:angle_5 196.373399 64.508000
+    angle_coeff @angle:angle_6 140.186305 62.977000
+    angle_coeff @angle:angle_7 106.275980 55.451000
+    angle_coeff @angle:angle_8 51.722968 64.681000
+    angle_coeff @angle:angle_9 178.720100 88.956000
+    angle_coeff @angle:angle_10 129.708987 97.295000
+    angle_coeff @angle:angle_11 89.049140 88.532000
+    angle_coeff @angle:angle_12 162.076697 106.523000
+    angle_coeff @angle:angle_13 85.744097 98.384000
+    angle_coeff @angle:angle_14 72.340344 117.298000
+    angle_coeff @angle:angle_15 68.838552 118.853000
+    angle_coeff @angle:angle_16 291.984226 60.065000
+    angle_coeff @angle:angle_17 341.997610 62.067000
+    angle_coeff @angle:angle_18 191.969264 53.433000
+    angle_coeff @angle:angle_19 164.391515 88.397000
+    angle_coeff @angle:angle_20 230.070124 65.574000
+    angle_coeff @angle:angle_21 90.963695 48.782000
+    angle_coeff @angle:angle_22 116.575191 72.556000
+    angle_coeff @angle:angle_23 216.333389 83.552000
+    angle_coeff @angle:angle_24 76.542830 80.054000
+    angle_coeff @angle:angle_25 72.618451 80.692000
+    angle_coeff @angle:angle_26 258.583652 108.079000
+    angle_coeff @angle:angle_27 56.126315 106.458000
+    angle_coeff @angle:angle_28 55.568523 126.038000
+    angle_coeff @angle:angle_29 104.239077 113.196000
+    angle_coeff @angle:angle_30 78.555880 61.316000
+    angle_coeff @angle:angle_31 49.728776 49.683000
+    angle_coeff @angle:angle_32 46.847682 66.232000
+    angle_coeff @angle:angle_33 161.503657 86.589000
+    angle_coeff @angle:angle_34 96.126912 85.035000
+    angle_coeff @angle:angle_35 52.040440 84.004000
+    angle_coeff @angle:angle_36 177.548470 113.201000
+    angle_coeff @angle:angle_37 72.404661 127.528000
+    angle_coeff @angle:angle_38 64.921152 114.486000
+    angle_coeff @angle:angle_39 273.598470 120.727000
+    angle_coeff @angle:angle_40 155.570363 108.775000
+    angle_coeff @angle:angle_41 115.840153 120.596000
+    angle_coeff @angle:angle_42 154.428561 135.893000
+    angle_coeff @angle:angle_43 131.352199 12.927000
+    angle_coeff @angle:angle_44 666.836042 27.400000
+    angle_coeff @angle:angle_45 408.983748 26.628000
+    angle_coeff @angle:angle_46 475.397467 35.567000
+    angle_coeff @angle:angle_47 99.287118 22.701000
+    angle_coeff @angle:angle_48 268.939054 52.134000
+    angle_coeff @angle:angle_49 203.473494 70.680000
+    angle_coeff @angle:angle_50 152.154780 54.092000
+    angle_coeff @angle:angle_51 218.300263 62.934000
+    angle_coeff @angle:angle_52 146.802294 53.753000
+    angle_coeff @angle:angle_53 143.426530 72.692000
+    angle_coeff @angle:angle_54 132.708724 76.953000
+    angle_coeff @angle:angle_55 300.540392 35.112000
+    angle_coeff @angle:angle_56 230.668786 36.948000
+    angle_coeff @angle:angle_57 207.276506 40.122000
+    angle_coeff @angle:angle_58 57.598566 35.009000
+    angle_coeff @angle:angle_59 198.107553 63.535000
+    angle_coeff @angle:angle_60 111.372060 79.876000
+    angle_coeff @angle:angle_61 99.115320 64.884000
+    angle_coeff @angle:angle_62 188.066683 75.844000
+    angle_coeff @angle:angle_63 108.294455 66.595000
+    angle_coeff @angle:angle_64 86.576267 85.209000
+    angle_coeff @angle:angle_65 105.154422 89.716000
+    angle_coeff @angle:angle_66 468.984226 42.740000
+    angle_coeff @angle:angle_67 293.823136 58.895000
+    angle_coeff @angle:angle_68 203.515631 33.305000
+    angle_coeff @angle:angle_69 306.808556 58.221000
+    angle_coeff @angle:angle_70 111.483915 81.096000
+    angle_coeff @angle:angle_71 98.835325 62.191000
+    angle_coeff @angle:angle_72 328.338910 55.080000
+    angle_coeff @angle:angle_73 162.283676 42.723000
+    angle_coeff @angle:angle_74 94.701721 56.002000
+    angle_coeff @angle:angle_75 196.016802 70.164000
+    angle_coeff @angle:angle_76 740.949809 19.166000
+    angle_coeff @angle:angle_77 656.587954 9.949000
+    angle_coeff @angle:angle_78 339.017686 26.832000
+    angle_coeff @angle:angle_79 284.346558 44.074000
+    angle_coeff @angle:angle_80 216.151171 27.937000
+    angle_coeff @angle:angle_81 319.138862 44.913000
+    angle_coeff @angle:angle_82 249.505258 40.922000
+    angle_coeff @angle:angle_83 231.751577 60.843000
+    angle_coeff @angle:angle_84 168.827342 55.899000
+    angle_coeff @angle:angle_85 481.777247 28.680000
+    angle_coeff @angle:angle_86 242.489723 35.827000
+    angle_coeff @angle:angle_87 71.934751 42.519000
+    angle_coeff @angle:angle_88 82.781692 34.088000
+    angle_coeff @angle:angle_89 300.072897 59.401000
+    angle_coeff @angle:angle_90 172.512452 58.313000
+    angle_coeff @angle:angle_91 147.680378 77.339000
+    angle_coeff @angle:angle_92 104.707792 66.803000
+    angle_coeff @angle:angle_93 264.565010 29.803000
+    angle_coeff @angle:angle_94 167.122968 50.376000
+    angle_coeff @angle:angle_95 132.224259 32.364000
+    angle_coeff @angle:angle_96 176.569790 41.844000
+    angle_coeff @angle:angle_97 115.061807 35.147000
+    angle_coeff @angle:angle_98 98.639173 55.280000
+    angle_coeff @angle:angle_99 100.822777 54.893000
+    angle_coeff @angle:angle_100 570.136711 23.070000
+    angle_coeff @angle:angle_101 515.564532 4.790000
+    angle_coeff @angle:angle_102 715.230163 25.207000
+    angle_coeff @angle:angle_103 438.369981 29.607000
+    angle_coeff @angle:angle_104 352.245220 44.365000
+    angle_coeff @angle:angle_105 228.492280 31.033000
+    angle_coeff @angle:angle_106 158.045029 18.905000
+    angle_coeff @angle:angle_107 610.434751 40.020000
+    angle_coeff @angle:angle_108 290.257648 49.234000
+    angle_coeff @angle:angle_109 199.329111 57.493000
+    angle_coeff @angle:angle_110 212.466778 35.734000
+    angle_coeff @angle:angle_111 478.745698 29.037000
+    angle_coeff @angle:angle_112 212.605784 34.273000
+    angle_coeff @angle:angle_113 183.545674 48.244000
+    angle_coeff @angle:angle_114 122.184704 32.949000
+    angle_coeff @angle:angle_115 760.794933 12.581000
+    angle_coeff @angle:angle_116 648.072180 19.208000
+    angle_coeff @angle:angle_117 604.177820 15.181000
+    angle_coeff @angle:angle_118 78.828776 20.152000
+    angle_coeff @angle:angle_119 467.272945 27.460000
+    angle_coeff @angle:angle_120 368.693595 23.662000
+  }
+
+  write_once("Data Masses") {
+    @atom:c1 12.011
+    @atom:f 18.998
+    @atom:o 15.999
+    @atom:os 15.999
+    @atom:s 32.065
+  }
+
+  write_once("In List_salt") {
+    group        FBS-           type   @atom:c1 @atom:f @atom:o @atom:os @atom:s
+    variable     FBS-_list      index  "C F O O S"
+  }
+
+  write("Data Atoms") {
+    $atom:O_1 $mol:m1 @atom:O -0.602371 1.803176 1.758017 -0.719864
+    $atom:S_2 $mol:m1 @atom:S 1.069035 2.137900 0.614564 0.195083
+    $atom:O_3 $mol:m1 @atom:O -0.607124 2.651198 -0.541254 -0.616810
+    $atom:O_4 $mol:m1 @atom:O -0.596606 3.343451 1.110470 1.254576
+    $atom:C_5 $mol:m1 @atom:C 0.162696 0.697949 0.124645 1.150358
+    $atom:F_6 $mol:m1 @atom:F -0.158946 1.155247 -0.586347 2.246327
+    $atom:F_7 $mol:m1 @atom:F -0.169838 0.063449 1.254155 1.632087
+    $atom:C_8 $mol:m1 @atom:C 0.272664 -0.300116 -0.779804 0.382425
+    $atom:F_9 $mol:m1 @atom:F -0.132797 0.356345 -1.947688 0.028674
+    $atom:F_10 $mol:m1 @atom:F -0.173080 -1.309197 -1.138232 1.262109
+    $atom:C_11 $mol:m1 @atom:C 0.230657 -0.952712 -0.193232 -0.901287
+    $atom:F_12 $mol:m1 @atom:F -0.123935 0.009969 0.024632 -1.870816
+    $atom:F_13 $mol:m1 @atom:F -0.183908 -1.817659 -1.155692 -1.397717
+    $atom:C_14 $mol:m1 @atom:C 0.582333 -1.764695 1.100964 -0.696880
+    $atom:F_15 $mol:m1 @atom:F -0.206818 -2.599249 0.994379 0.401327
+    $atom:F_16 $mol:m1 @atom:F -0.152258 -0.930242 2.190008 -0.533057
+    $atom:F_17 $mol:m1 @atom:F -0.209703 -2.544814 1.330088 -1.816535
+  }
+
+  write("Data Bonds") {
+    $bond:b1 @bond:bond_1 $atom:O_1 $atom:S_2
+    $bond:b2 @bond:bond_1 $atom:O_1 $atom:O_3
+    $bond:b3 @bond:bond_1 $atom:O_1 $atom:O_4
+    $bond:b4 @bond:bond_1 $atom:O_1 $atom:C_5
+    $bond:b5 @bond:bond_1 $atom:O_1 $atom:F_6
+    $bond:b6 @bond:bond_1 $atom:O_1 $atom:F_7
+    $bond:b7 @bond:bond_1 $atom:O_1 $atom:C_8
+    $bond:b8 @bond:bond_1 $atom:O_1 $atom:F_9
+    $bond:b9 @bond:bond_1 $atom:O_1 $atom:F_10
+    $bond:b10 @bond:bond_1 $atom:O_1 $atom:C_11
+    $bond:b11 @bond:bond_1 $atom:O_1 $atom:F_12
+    $bond:b12 @bond:bond_1 $atom:O_1 $atom:F_13
+    $bond:b13 @bond:bond_1 $atom:O_1 $atom:C_14
+    $bond:b14 @bond:bond_1 $atom:O_1 $atom:F_15
+    $bond:b15 @bond:bond_1 $atom:O_1 $atom:F_16
+    $bond:b16 @bond:bond_1 $atom:O_1 $atom:F_17
+  }
+
+  write("Data Angles") {
+    $angle:a1 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:O_3
+    $angle:a2 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:O_4
+    $angle:a3 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:C_5
+    $angle:a4 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_6
+    $angle:a5 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_7
+    $angle:a6 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:C_8
+    $angle:a7 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_9
+    $angle:a8 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_10
+    $angle:a9 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:C_11
+    $angle:a10 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_12
+    $angle:a11 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_13
+    $angle:a12 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:C_14
+    $angle:a13 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_15
+    $angle:a14 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_16
+    $angle:a15 @angle:angle_1 $atom:S_2 $atom:O_1 $atom:F_17
+    $angle:a16 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:O_4
+    $angle:a17 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:C_5
+    $angle:a18 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_6
+    $angle:a19 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_7
+    $angle:a20 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:C_8
+    $angle:a21 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_9
+    $angle:a22 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_10
+    $angle:a23 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:C_11
+    $angle:a24 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_12
+    $angle:a25 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_13
+    $angle:a26 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:C_14
+    $angle:a27 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_15
+    $angle:a28 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_16
+    $angle:a29 @angle:angle_1 $atom:O_3 $atom:O_1 $atom:F_17
+    $angle:a30 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:C_5
+    $angle:a31 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_6
+    $angle:a32 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_7
+    $angle:a33 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:C_8
+    $angle:a34 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_9
+    $angle:a35 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_10
+    $angle:a36 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:C_11
+    $angle:a37 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_12
+    $angle:a38 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_13
+    $angle:a39 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:C_14
+    $angle:a40 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_15
+    $angle:a41 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_16
+    $angle:a42 @angle:angle_1 $atom:O_4 $atom:O_1 $atom:F_17
+    $angle:a43 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_6
+    $angle:a44 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_7
+    $angle:a45 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:C_8
+    $angle:a46 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_9
+    $angle:a47 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_10
+    $angle:a48 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:C_11
+    $angle:a49 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_12
+    $angle:a50 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_13
+    $angle:a51 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:C_14
+    $angle:a52 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_15
+    $angle:a53 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_16
+    $angle:a54 @angle:angle_1 $atom:C_5 $atom:O_1 $atom:F_17
+    $angle:a55 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_7
+    $angle:a56 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:C_8
+    $angle:a57 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_9
+    $angle:a58 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_10
+    $angle:a59 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:C_11
+    $angle:a60 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_12
+    $angle:a61 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_13
+    $angle:a62 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:C_14
+    $angle:a63 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_15
+    $angle:a64 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_16
+    $angle:a65 @angle:angle_1 $atom:F_6 $atom:O_1 $atom:F_17
+    $angle:a66 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:C_8
+    $angle:a67 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_9
+    $angle:a68 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_10
+    $angle:a69 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:C_11
+    $angle:a70 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_12
+    $angle:a71 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_13
+    $angle:a72 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:C_14
+    $angle:a73 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_15
+    $angle:a74 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_16
+    $angle:a75 @angle:angle_1 $atom:F_7 $atom:O_1 $atom:F_17
+    $angle:a76 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_9
+    $angle:a77 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_10
+    $angle:a78 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:C_11
+    $angle:a79 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_12
+    $angle:a80 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_13
+    $angle:a81 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:C_14
+    $angle:a82 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_15
+    $angle:a83 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_16
+    $angle:a84 @angle:angle_1 $atom:C_8 $atom:O_1 $atom:F_17
+    $angle:a85 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:F_10
+    $angle:a86 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:C_11
+    $angle:a87 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:F_12
+    $angle:a88 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:F_13
+    $angle:a89 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:C_14
+    $angle:a90 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:F_15
+    $angle:a91 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:F_16
+    $angle:a92 @angle:angle_1 $atom:F_9 $atom:O_1 $atom:F_17
+    $angle:a93 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:C_11
+    $angle:a94 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:F_12
+    $angle:a95 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:F_13
+    $angle:a96 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:C_14
+    $angle:a97 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:F_15
+    $angle:a98 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:F_16
+    $angle:a99 @angle:angle_1 $atom:F_10 $atom:O_1 $atom:F_17
+    $angle:a100 @angle:angle_1 $atom:C_11 $atom:O_1 $atom:F_12
+    $angle:a101 @angle:angle_1 $atom:C_11 $atom:O_1 $atom:F_13
+    $angle:a102 @angle:angle_1 $atom:C_11 $atom:O_1 $atom:C_14
+    $angle:a103 @angle:angle_1 $atom:C_11 $atom:O_1 $atom:F_15
+    $angle:a104 @angle:angle_1 $atom:C_11 $atom:O_1 $atom:F_16
+    $angle:a105 @angle:angle_1 $atom:C_11 $atom:O_1 $atom:F_17
+    $angle:a106 @angle:angle_1 $atom:F_12 $atom:O_1 $atom:F_13
+    $angle:a107 @angle:angle_1 $atom:F_12 $atom:O_1 $atom:C_14
+    $angle:a108 @angle:angle_1 $atom:F_12 $atom:O_1 $atom:F_15
+    $angle:a109 @angle:angle_1 $atom:F_12 $atom:O_1 $atom:F_16
+    $angle:a110 @angle:angle_1 $atom:F_12 $atom:O_1 $atom:F_17
+    $angle:a111 @angle:angle_1 $atom:F_13 $atom:O_1 $atom:C_14
+    $angle:a112 @angle:angle_1 $atom:F_13 $atom:O_1 $atom:F_15
+    $angle:a113 @angle:angle_1 $atom:F_13 $atom:O_1 $atom:F_16
+    $angle:a114 @angle:angle_1 $atom:F_13 $atom:O_1 $atom:F_17
+    $angle:a115 @angle:angle_1 $atom:C_14 $atom:O_1 $atom:F_15
+    $angle:a116 @angle:angle_1 $atom:C_14 $atom:O_1 $atom:F_16
+    $angle:a117 @angle:angle_1 $atom:C_14 $atom:O_1 $atom:F_17
+    $angle:a118 @angle:angle_1 $atom:F_15 $atom:O_1 $atom:F_16
+    $angle:a119 @angle:angle_1 $atom:F_15 $atom:O_1 $atom:F_17
+    $angle:a120 @angle:angle_1 $atom:F_16 $atom:O_1 $atom:F_17
+  }
+
+}

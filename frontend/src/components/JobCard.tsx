@@ -1,0 +1,447 @@
+/**
+ * 任务卡片组件
+ */
+import { Card, Space, Button, Popconfirm, Typography, Descriptions, Steps, message, Progress, Tag, Tooltip, theme } from 'antd';
+import {
+  EyeOutlined,
+  StopOutlined,
+  RocketOutlined,
+  SettingOutlined,
+  CopyOutlined,
+  RedoOutlined,
+  CalendarOutlined,
+  ExperimentOutlined,
+  DeleteOutlined,
+  WarningOutlined,
+  QuestionCircleOutlined,
+} from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
+import type { MDJob, ElectrolyteSystem, MDJobCreate } from '../types';
+import { JobStatus, UserRole } from '../types';
+import StatusTag from './StatusTag';
+import dayjs from 'dayjs';
+import { createMDJob } from '../api/jobs';
+import { useAuthStore } from '../stores/authStore';
+import { useThemeStore } from '../stores/themeStore';
+import { translateError } from '../utils/errorTranslator';
+
+const { Text } = Typography;
+
+interface JobCardProps {
+  job: MDJob;
+  electrolyte?: ElectrolyteSystem;
+  onCancel: (id: number) => void;
+  onResubmit?: (job: MDJob) => void;
+  onDelete?: (id: number) => void;
+}
+
+export default function JobCard({ job, electrolyte, onCancel, onResubmit, onDelete }: JobCardProps) {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const { mode } = useThemeStore();
+  const { token } = theme.useToken();
+  const isDark = mode === 'dark';
+
+  // 判断是否可以取消（只有已提交到集群的任务才能取消）
+  const canCancel = job.status === JobStatus.QUEUED || job.status === JobStatus.RUNNING;
+
+  // 判断是否可以重新提交（失败、取消或已完成的任务都可以重新提交）
+  const canResubmit = job.status === JobStatus.FAILED ||
+                      job.status === JobStatus.CANCELLED ||
+                      job.status === JobStatus.COMPLETED;
+
+  // 判断是否可以配置（CREATED 和 CANCELLED 状态可以配置）
+  const canConfigure = job.status === JobStatus.CREATED || job.status === JobStatus.CANCELLED;
+
+  // 判断是否可以删除（非运行中和非排队中的任务可以删除）
+  const canDelete = job.status !== JobStatus.QUEUED && job.status !== JobStatus.RUNNING;
+
+  // 判断是否启用了QC计算
+  const hasQCEnabled = job.config?.qc_enabled === true;
+
+  // 生成任务类型标签
+  const getTaskType = () => {
+    return hasQCEnabled ? 'MD+QC 任务' : 'MD 任务';
+  };
+
+  // 获取任务名（显示自动生成的任务名）
+  const getJobName = () => {
+    // 显示自动生成的任务名（格式：配方名-MD序号-温度）
+    if (job.config?.job_name) {
+      return job.config.job_name;
+    }
+    // 备选方案：显示任务ID
+    return `任务 #${job.id}`;
+  };
+
+  // 生成配方组成摘要（阳离子:阴离子:溶剂）
+  const getCompositionSummary = () => {
+    if (!electrolyte) return null;
+
+    const parts: string[] = [];
+
+    // 阳离子
+    if (electrolyte.cations && electrolyte.cations.length > 0) {
+      const cationStr = electrolyte.cations.map(c => `${c.name}×${c.number}`).join('+');
+      parts.push(cationStr);
+    }
+
+    // 阴离子
+    if (electrolyte.anions && electrolyte.anions.length > 0) {
+      const anionStr = electrolyte.anions.map(a => `${a.name}×${a.number}`).join('+');
+      parts.push(anionStr);
+    }
+
+    // 溶剂
+    if (electrolyte.solvents && electrolyte.solvents.length > 0) {
+      const solventStr = electrolyte.solvents.map(s => `${s.name}×${s.number}`).join('+');
+      parts.push(solventStr);
+    }
+
+    return parts.join(' / ');
+  };
+
+  // 获取温度显示
+  const getTemperature = () => {
+    return job.config?.temperature || 298.15;
+  };
+
+  // 处理按钮点击
+  const handleConfigClick = () => {
+    navigate(`/workspace/liquid-electrolyte/md/${job.id}/submit`);
+  };
+
+  const handleDetailClick = () => {
+    navigate(`/workspace/liquid-electrolyte/md/${job.id}`);
+  };
+
+  // 复制任务配置
+  const handleCopyConfig = async () => {
+    try {
+      const newJobData: MDJobCreate = {
+        system_id: job.system_id,
+        nsteps_npt: job.config?.nsteps_npt || 100000,
+        nsteps_nvt: job.config?.nsteps_nvt || 500000,
+        timestep: job.config?.timestep || 1.0,
+        // 复制资源配置
+        slurm_partition: job.config?.slurm_partition || 'cpu',
+        slurm_nodes: job.config?.slurm_nodes || 1,
+        slurm_ntasks: job.config?.slurm_ntasks || 8,
+        slurm_cpus_per_task: job.config?.slurm_cpus_per_task || 8,
+        slurm_time: job.config?.slurm_time || 7200,
+      };
+
+      const newJob = await createMDJob(newJobData);
+      message.success('任务配置已复制，请配置参数后提交');
+
+      // 跳转到新任务的配置页面
+      navigate(`/workspace/liquid-electrolyte/md/${newJob.id}/submit`);
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '复制任务失败');
+    }
+  };
+
+  // 处理卡片点击 - 整个卡片可点击跳转
+  const handleCardClick = (e: React.MouseEvent) => {
+    // 如果点击的是按钮或其子元素，不触发卡片跳转
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('.ant-popconfirm') || target.closest('.ant-card-actions')) {
+      return;
+    }
+    // 根据状态决定跳转目标
+    if (job.status === JobStatus.CREATED) {
+      handleConfigClick();
+    } else {
+      handleDetailClick();
+    }
+  };
+
+  // 获取状态对应的渐变色（使用柔和的颜色）
+  const getStatusGradient = () => {
+    switch (job.status) {
+      case JobStatus.RUNNING:
+      case JobStatus.QUEUED:
+      case JobStatus.POSTPROCESSING:
+        return 'linear-gradient(135deg, #5B8DEF 0%, #7C6EAF 100%)';  // 柔和的蓝紫色
+      case JobStatus.COMPLETED:
+        return 'linear-gradient(135deg, #52C41A 0%, #73D13D 100%)';  // 柔和的绿色
+      case JobStatus.FAILED:
+      case JobStatus.CANCELLED:
+        return 'linear-gradient(135deg, #F5222D 0%, #FF7875 100%)';  // 柔和的红色
+      default:
+        return 'linear-gradient(135deg, #5B8DEF 0%, #7BA5F5 100%)';  // 柔和的蓝色
+    }
+  };
+
+  return (
+    <Card
+      hoverable
+      onClick={handleCardClick}
+      style={{
+        height: '100%',
+        cursor: 'pointer',
+        transition: 'all 0.3s ease',
+        border: `1px solid ${token.colorBorder}`,
+        borderRadius: 12,
+        boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.06)',
+        background: token.colorBgContainer,
+      }}
+      styles={{
+        body: { padding: '20px' },
+      }}
+      actions={[
+        canConfigure && (
+          <Button
+            key="config"
+            type="link"
+            icon={<SettingOutlined />}
+            onClick={(e) => { e.stopPropagation(); handleConfigClick(); }}
+          >
+            {job.status === JobStatus.CANCELLED ? '重新配置' : '配置参数'}
+          </Button>
+        ),
+        job.status !== JobStatus.CREATED && (
+          <Button
+            key="detail"
+            type="link"
+            icon={<EyeOutlined />}
+            onClick={(e) => { e.stopPropagation(); handleDetailClick(); }}
+          >
+            查看详情
+          </Button>
+        ),
+        <Button
+          key="copy"
+          type="link"
+          icon={<CopyOutlined />}
+          onClick={(e) => { e.stopPropagation(); handleCopyConfig(); }}
+        >
+          复制配置
+        </Button>,
+        canCancel ? (
+          <Popconfirm
+            key="cancel"
+            title="确定要取消这个任务吗？"
+            description="取消后任务将停止运行。"
+            onConfirm={() => onCancel(job.id)}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button type="link" danger icon={<StopOutlined />} onClick={(e) => e.stopPropagation()}>
+              取消任务
+            </Button>
+          </Popconfirm>
+        ) : null,
+        canResubmit && onResubmit ? (
+          <Button
+            key="resubmit"
+            type="link"
+            icon={<RedoOutlined />}
+            onClick={(e) => { e.stopPropagation(); onResubmit(job); }}
+          >
+            重新提交
+          </Button>
+        ) : null,
+        canDelete && onDelete ? (
+          <Popconfirm
+            key="delete"
+            title="确定要删除这个任务吗？"
+            description="删除后不可恢复。"
+            onConfirm={() => onDelete(job.id)}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button type="link" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>
+              删除
+            </Button>
+          </Popconfirm>
+        ) : null,
+      ].filter(Boolean)}
+    >
+      <div style={{ display: 'flex', gap: 16 }}>
+        {/* 左侧图标 */}
+        <div style={{
+          width: 48,
+          height: 48,
+          borderRadius: 12,
+          background: getStatusGradient(),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <RocketOutlined style={{ fontSize: 24, color: '#fff' }} />
+        </div>
+
+        {/* 右侧内容 */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* 第一行：任务类型 + 状态标签 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <Space size={8}>
+              <Text strong style={{ fontSize: 14, color: hasQCEnabled ? '#722ed1' : '#1890ff' }}>
+                {getTaskType()}
+              </Text>
+              {/* 电荷计算方式标签 */}
+              {job.config?.charge_method && (
+                <Tooltip title={job.config.charge_method === 'resp' ? 'RESP 高精度电荷' : 'LigParGen 快速电荷'}>
+                  <Tag
+                    color={job.config.charge_method === 'resp' ? 'gold' : 'blue'}
+                    style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px', margin: 0 }}
+                  >
+                    {job.config.charge_method === 'resp' ? 'RESP' : 'LigParGen'}
+                  </Tag>
+                </Tooltip>
+              )}
+              {/* 管理员可见：提交用户 */}
+              {user?.role === UserRole.ADMIN && job.username && (
+                <Tooltip title={`提交用户: ${job.user_email || '未知邮箱'}`}>
+                  <Tag
+                    color="cyan"
+                    style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px', margin: 0 }}
+                  >
+                    👤 {job.username}
+                  </Tag>
+                </Tooltip>
+              )}
+            </Space>
+            <StatusTag status={job.status} />
+          </div>
+
+          {/* 第二行：任务名（突出显示） */}
+          <div style={{ marginBottom: 4 }}>
+            <Tooltip title={getJobName()}>
+              <Text
+                strong
+                style={{
+                  fontSize: 13,
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {getJobName()}
+              </Text>
+            </Tooltip>
+          </div>
+
+          {/* 第三行：配方组成 + 温度 */}
+          {electrolyte && (
+            <div style={{ marginBottom: 4 }}>
+              <Tooltip title={getCompositionSummary()}>
+                <Text
+                  type="secondary"
+                  style={{
+                    fontSize: 11,
+                    display: 'block',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  🧪 {getCompositionSummary()}
+                </Text>
+              </Tooltip>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                🌡️ {getTemperature()} K
+                {job.config?.user_note && (
+                  <Tooltip title={`备注: ${job.config.user_note}`}>
+                    <span style={{ marginLeft: 8, fontStyle: 'italic' }}>
+                      📝 {job.config.user_note}
+                    </span>
+                  </Tooltip>
+                )}
+              </Text>
+            </div>
+          )}
+
+          {/* 第四行：计算参数 */}
+          {job.config && (
+            <div style={{ marginBottom: 6 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                NPT: {job.config.nsteps_npt?.toLocaleString()} | NVT: {job.config.nsteps_nvt?.toLocaleString()}
+                {' | '}资源: {(job.config.slurm_ntasks || 8) * (job.config.slurm_cpus_per_task || 8)} 核
+                {job.config.slurm_partition && ` (${job.config.slurm_partition})`}
+                {job.slurm_job_id && ` | Slurm: ${job.slurm_job_id}`}
+              </Text>
+            </div>
+          )}
+
+          {/* 进度条 - 根据状态显示 */}
+          {(() => {
+            // 根据状态计算显示的进度值
+            const getProgressByStatus = () => {
+              switch (job.status) {
+                case JobStatus.CREATED:
+                  return { percent: 0, status: 'normal' as const, text: '待配置' };
+                case JobStatus.QUEUED:
+                  return { percent: 15, status: 'active' as const, text: '排队中' };
+                case JobStatus.RUNNING:
+                  // 运行中使用实际进度，如果没有则显示中间值
+                  return { percent: job.progress || 50, status: 'active' as const, text: '运行中' };
+                case JobStatus.POSTPROCESSING:
+                  return { percent: 90, status: 'active' as const, text: '后处理' };
+                case JobStatus.COMPLETED:
+                  return { percent: 100, status: 'success' as const, text: '已完成' };
+                case JobStatus.FAILED:
+                  return { percent: 100, status: 'exception' as const, text: '失败' };
+                case JobStatus.CANCELLED:
+                  // 防止已完成的任务显示"已取消"
+                  // 如果进度是 100%，说明任务实际上已完成，不应该显示为取消
+                  if (job.progress === 100) {
+                    return { percent: 100, status: 'success' as const, text: '已完成' };
+                  }
+                  return { percent: job.progress || 0, status: 'exception' as const, text: '已取消' };
+                default:
+                  return { percent: 0, status: 'normal' as const, text: '' };
+              }
+            };
+
+            const progressInfo = getProgressByStatus();
+
+            // 只在非CREATED状态显示进度条
+            if (job.status === JobStatus.CREATED) {
+              return null;
+            }
+
+            return (
+              <div style={{ marginBottom: 8 }}>
+                <Progress
+                  percent={progressInfo.percent}
+                  size="small"
+                  status={progressInfo.status}
+                  strokeColor={
+                    progressInfo.status === 'active'
+                      ? { '0%': '#108ee9', '100%': '#87d068' }
+                      : undefined
+                  }
+                  format={() => progressInfo.text}
+                />
+              </div>
+            );
+          })()}
+
+          <Space size={4}>
+            <CalendarOutlined style={{ color: '#bfbfbf', fontSize: 12 }} />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {dayjs(job.created_at).format('YYYY-MM-DD HH:mm')}
+            </Text>
+            {/* 错误提示 - 简洁文字 */}
+            {job.error_message && job.status !== JobStatus.COMPLETED && (() => {
+              const translatedError = translateError(job.error_message);
+              return (
+                <>
+                  <span style={{ color: '#bfbfbf', margin: '0 4px' }}>|</span>
+                  <Text style={{ fontSize: 12, color: '#ff7875' }}>
+                    {translatedError?.suggestion || '查看详情'}
+                  </Text>
+                </>
+              );
+            })()}
+          </Space>
+        </div>
+      </div>
+    </Card>
+  );
+}
+

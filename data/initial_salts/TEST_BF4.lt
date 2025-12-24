@@ -1,0 +1,32 @@
+# LAMMPS force field file for TEST_BF4 (tetrafluoroborate anion)
+# Generated from Sobtop GROMACS topology with RESP charges
+# Bond parameters from DRIH method (Hessian-based)
+# Angle parameters from DRIH method (Hessian-based)
+
+TEST_BF4 {
+
+  write("Data Atoms") {
+    @atom:B1 @atom:UF_B 1.187283 0.0000 0.0000 0.0000
+    @atom:B2 @atom:f -0.546837 0.7100 0.9600 0.7600
+    @atom:B3 @atom:f -0.546810 0.0900 -1.2700 0.6300
+    @atom:B4 @atom:f -0.546859 -1.3600 0.3900 -0.0900
+    @atom:B5 @atom:f -0.546778 0.5600 -0.0800 -1.3000
+  }
+
+  write("Data Bonds") {
+    @bond:B1-F2 @atom:B1 @atom:F2
+    @bond:B1-F3 @atom:B1 @atom:F3
+    @bond:B1-F4 @atom:B1 @atom:F4
+    @bond:B1-F5 @atom:B1 @atom:F5
+  }
+
+  write("Data Angles") {
+    @angle:F2-B1-F3 @atom:F2 @atom:B1 @atom:F3
+    @angle:F2-B1-F4 @atom:F2 @atom:B1 @atom:F4
+    @angle:F2-B1-F5 @atom:F2 @atom:B1 @atom:F5
+    @angle:F3-B1-F4 @atom:F3 @atom:B1 @atom:F4
+    @angle:F3-B1-F5 @atom:F3 @atom:B1 @atom:F5
+    @angle:F4-B1-F5 @atom:F4 @atom:B1 @atom:F5
+  }
+
+}

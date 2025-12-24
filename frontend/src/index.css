@@ -1,0 +1,356 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* 浅色主题变量 */
+:root {
+  --color-primary: #5B8DEF;
+  --color-primary-light: #7BA5F5;
+  --color-success: #52C41A;
+  --color-warning: #FAAD14;
+  --color-error: #F5222D;
+  --color-bg-container: #FFFFFF;
+  --color-bg-layout: #F5F7FA;
+  --color-bg-elevated: #FFFFFF;
+  --color-text: #333333;
+  --color-text-secondary: #666666;
+  --color-border: #E8E8E8;
+  --gradient-primary: linear-gradient(135deg, #5B8DEF 0%, #7C6EAF 100%);
+  --gradient-success: linear-gradient(135deg, #52C41A 0%, #73D13D 100%);
+  --gradient-error: linear-gradient(135deg, #F5222D 0%, #FF7875 100%);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* 深色主题变量 */
+[data-theme='dark'] {
+  --color-primary: #6B9AFF;
+  --color-primary-light: #8AAFFF;
+  --color-success: #73D13D;
+  --color-warning: #FFC53D;
+  --color-error: #FF4D4F;
+  --color-bg-container: #1F1F1F;
+  --color-bg-layout: #141414;
+  --color-bg-elevated: #262626;
+  --color-text: #E8E8E8;
+  --color-text-secondary: #A0A0A0;
+  --color-border: #303030;
+  --gradient-primary: linear-gradient(135deg, #6B9AFF 0%, #9C8DC8 100%);
+  --gradient-success: linear-gradient(135deg, #73D13D 0%, #95DE64 100%);
+  --gradient-error: linear-gradient(135deg, #FF4D4F 0%, #FF7875 100%);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Dark 模式下的 Ant Design 组件样式覆盖 */
+[data-theme='dark'] .ant-card-head {
+  background: transparent !important;
+  border-bottom-color: var(--color-border) !important;
+}
+
+[data-theme='dark'] .ant-table-thead > tr > th {
+  background: #1a1a1a !important;
+  color: var(--color-text) !important;
+  border-bottom-color: var(--color-border) !important;
+}
+
+[data-theme='dark'] .ant-table-tbody > tr > td {
+  border-bottom-color: var(--color-border) !important;
+}
+
+[data-theme='dark'] .ant-table-tbody > tr:hover > td {
+  background: #2a2a2a !important;
+}
+
+/* 固定列背景色 - 浅色主题 */
+.ant-table-cell-fix-left,
+.ant-table-cell-fix-right {
+  background: #ffffff !important;
+}
+
+.ant-table-thead > tr > .ant-table-cell-fix-left,
+.ant-table-thead > tr > .ant-table-cell-fix-right {
+  background: #fafafa !important;
+}
+
+.ant-table-tbody > tr:hover > .ant-table-cell-fix-left,
+.ant-table-tbody > tr:hover > .ant-table-cell-fix-right {
+  background: #f5f5f5 !important;
+}
+
+/* 固定列背景色 - 深色主题 */
+[data-theme='dark'] .ant-table-cell-fix-left,
+[data-theme='dark'] .ant-table-cell-fix-right {
+  background: #1f1f1f !important;
+}
+
+[data-theme='dark'] .ant-table-thead > tr > .ant-table-cell-fix-left,
+[data-theme='dark'] .ant-table-thead > tr > .ant-table-cell-fix-right {
+  background: #1a1a1a !important;
+}
+
+[data-theme='dark'] .ant-table-tbody > tr:hover > .ant-table-cell-fix-left,
+[data-theme='dark'] .ant-table-tbody > tr:hover > .ant-table-cell-fix-right {
+  background: #2a2a2a !important;
+}
+
+/* 用户管理页面特定样式 */
+.user-management-table .ant-table-thead > tr > th {
+  background: var(--color-bg-elevated) !important;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 12px 16px;
+}
+
+.user-management-table .ant-table-tbody > tr > td {
+  padding: 12px 16px;
+  font-size: 13px;
+}
+
+.user-management-table .ant-table-tbody > tr:hover > td {
+  background: var(--color-bg-layout) !important;
+}
+
+/* CheckableTag 样式增强 */
+.ant-tag-checkable:not(.ant-tag-checkable-checked):hover {
+  border-color: var(--color-primary) !important;
+  background: var(--color-primary) !important;
+  background-opacity: 0.1;
+}
+
+.ant-tag-checkable {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.ant-tag-checkable:active {
+  transform: scale(0.98);
+}
+
+/* 动画效果 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(102, 126, 234, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0);
+  }
+}
+
+/* 筛选卡片悬停效果 */
+.filter-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.filter-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+/* 渐变背景动画 */
+.gradient-bg {
+  background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #f5576c);
+  background-size: 400% 400%;
+  animation: gradientShift 15s ease infinite;
+}
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* 加载动画 */
+.loading-shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+[data-theme='dark'] .loading-shimmer {
+  background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
+  background-size: 200% 100%;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* 用户管理页面增强样式 */
+.user-filter-section {
+  animation: slideInUp 0.6s ease-out;
+}
+
+.user-stats-card {
+  animation: fadeIn 0.8s ease-out;
+  animation-fill-mode: both;
+}
+
+.user-stats-card:nth-child(1) { animation-delay: 0.1s; }
+.user-stats-card:nth-child(2) { animation-delay: 0.2s; }
+.user-stats-card:nth-child(3) { animation-delay: 0.3s; }
+.user-stats-card:nth-child(4) { animation-delay: 0.4s; }
+
+/* 表格行悬停效果增强 */
+.user-management-table .ant-table-tbody > tr {
+  transition: all 0.2s ease;
+}
+
+.user-management-table .ant-table-tbody > tr:hover {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] .user-management-table .ant-table-tbody > tr:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 按钮悬停效果 */
+.ant-btn {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ant-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.ant-btn:active {
+  transform: translateY(0);
+}
+
+/* 输入框聚焦效果 */
+.ant-input:focus,
+.ant-input-focused {
+  transform: translateY(-1px);
+  transition: all 0.3s ease;
+}
+
+/* 卡片悬停效果 */
+.ant-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ant-card:hover {
+  transform: translateY(-2px);
+}
+
+/* 侧边栏菜单滚动条样式 */
+.sidebar-menu-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.35);
+}
+
+/* 侧边栏菜单样式优化 */
+.ant-layout-sider-dark .ant-menu-dark {
+  background: transparent !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-item {
+  margin: 2px 8px !important;
+  border-radius: 8px !important;
+  color: rgba(255, 255, 255, 0.65) !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-item-selected {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%) !important;
+  color: #fff !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-submenu-title {
+  margin: 2px 8px !important;
+  border-radius: 8px !important;
+  color: rgba(255, 255, 255, 0.65) !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-submenu-title:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-sub {
+  background: transparent !important;
+}
+
+.ant-layout-sider-dark .ant-menu-dark .ant-menu-sub .ant-menu-item {
+  padding-left: 48px !important;
+}

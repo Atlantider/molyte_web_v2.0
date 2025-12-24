@@ -1,0 +1,145 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.log
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Frontend build
+frontend/dist/
+frontend/build/
+frontend/.vite/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+molyte.db
+
+# Redis
+dump.rdb
+*.rdb
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Logs
+*.log
+logs/
+*.pid
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Work directories (task data) - 完全排除所有计算工作目录
+data/md_work/
+data/qc_work/
+data/charges/
+
+# 计算结果文件类型 - 通常很大，不应上传到Git
+*.chk
+*.fchk
+*.log
+*.out
+*.gjf
+*.cub
+*.dat
+*.tga
+*.png
+*.xyz
+*.pdb
+*.lt
+!data/initial_salts/*.lt
+*.txt
+*.vmd
+*.sh
+!start_complete.sh
+!stop_complete.sh
+
+# Backup
+*_backup/
+backup/
+
+# Deployment scripts (keep only essential ones)
+# All .sh files except start_complete.sh and stop_complete.sh are ignored
+*.sh
+!start_complete.sh
+!stop_complete.sh
+
+# Documentation (moved to backup)
+*.md
+!README.md
+
+# Deployment secrets (实际配置文件，包含秘钥)
+deployment/polling_worker_config*.yaml
+deployment/*_secret*.yaml
+deployment/*.local.yaml
+
+# SSL/TLS certificates and keys
+*.key
+*.pem
+*.crt
+*.cert
+!*.pub
+
+# Large external projects (不上传大型外部项目文件)
+predict_block-master.zip
+predict_block-master/
+
+# Backend data files (large CSV files for ML models)
+backend/data/*.csv
+

@@ -25,6 +25,33 @@ export const refreshIons = async (): Promise<AvailableIons> => {
 };
 
 /**
+ * 获取电解液标签选项（用于分类）
+ */
+export interface LabelOption {
+  value: string;
+  label: string;
+}
+
+export interface LabelCategory {
+  label: string;
+  type: 'single' | 'multiple';
+  options: LabelOption[];
+}
+
+export interface LabelOptions {
+  battery_type: LabelCategory;
+  anode_types: LabelCategory;
+  cathode_types: LabelCategory;
+  conditions: LabelCategory;
+  electrolyte_type: LabelCategory;
+}
+
+export const getLabelOptions = async (): Promise<LabelOptions> => {
+  const response = await client.get('/electrolytes/label-options');
+  return response.data;
+};
+
+/**
  * 获取所有电解质体系
  */
 export const getElectrolytes = async (): Promise<ElectrolyteSystem[]> => {

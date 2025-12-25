@@ -80,6 +80,7 @@ import {
 } from '../api/qc';
 import { getPartitions, getSlurmSuggestion, PartitionInfo } from '../api/slurm';
 import { downloadTemplate, batchImportUpload, BatchImportResult } from '../api/batchImport';
+import { getUserProfile, UserProfile } from '../api/auth';  // 添加用户权限加载
 import type { QCJob, QCJobCreate, SolventConfig } from '../types/qc';
 import { useThemeStore } from '../stores/themeStore';
 
@@ -173,6 +174,10 @@ export default function QCJobs() {
   const [useRecommendedParams, setUseRecommendedParams] = useState(true);
   const [recommendationReason, setRecommendationReason] = useState<string>('');
   const [moleculeCollapseKey, setMoleculeCollapseKey] = useState<string[]>([]);
+
+  // 用户权限和QC引擎选择
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [selectedQCEngine, setSelectedQCEngine] = useState<string>('gaussian');  // 默认gaussian
 
   // 批量选择相关状态
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
@@ -328,6 +333,20 @@ export default function QCJobs() {
     }
   };
 
+  // 加载用户权限
+  const loadUserPermissions = async () => {
+    try {
+      const profile = await getUserProfile();
+      setUserProfile(profile);
+      // 如果用户没有Gaussian权限，默认选择PySCF
+      if (!profile.can_use_gaussian) {
+        setSelectedQCEngine('pyscf');
+      }
+    } catch (error) {
+      console.error('加载用户权限失败:', error);
+    }
+  };
+
   // 检查是否有活跃任务
   const hasActiveJobs = useCallback(() => {
     return jobs.some(job =>
@@ -394,7 +413,34 @@ export default function QCJobs() {
   };
 
   // 根据精度等级获取基础参数
-  const getBaseParams = (accuracy: string) => {
+  // 渲染状态标签(支持重试显示)
+  const renderStatus = (status: string, record: QCJob) => {
+    const { retry_count = 0, max_retries = 3 } = record;
+
+    // 重试中或运行中且有重试次数
+    if (status === 'RETRYING' || (status === 'RUNNING' && retry_count > 0)) {
+      return (
+        <Tag icon={<SyncOutlined spin />} color="orange">
+          重试中 {retry_count}/{max_retries}
+        </Tag>
+      );
+    }
+
+    // 失败状态显示重试信息
+    if (status === 'FAILED') {
+      const retryInfo = retry_count > 0 ? ` (已重试${retry_count}次)` : '';
+      return <Tag color="red">失败{retryInfo}</Tag>;
+    }
+
+    // 其他状态的颜色映射
+    const color = getStatusColor(status);
+    const text = getStatusText(status);
+
+    return <Tag color={color}>{text}</Tag>;
+  };
+
+  // 状态颜色映射
+  const getStatusColor = (status: string) => {
     switch (accuracy) {
       case 'fast':
         return { functional: 'HF', basis_set: 'STO-3G' };
@@ -587,6 +633,7 @@ export default function QCJobs() {
   useEffect(() => {
     loadJobs(activeTab);
     loadOptions();
+    loadUserPermissions();  // 加载用户权限
   }, [activeTab, pagination.current, pagination.pageSize, loadJobs]);
 
   // 轮询活跃任务
@@ -680,6 +727,8 @@ export default function QCJobs() {
         slurm_partition: values.slurm_partition || 'cpu',
         slurm_cpus: values.slurm_cpus || 16,
         slurm_time: values.slurm_time || 7200,
+        // QC引擎选择
+        qc_engine: values.qc_engine || selectedQCEngine || 'gaussian',
       };
 
       if (editingJob) {
@@ -1554,6 +1603,62 @@ export default function QCJobs() {
                 </Select>
               </Form.Item>
             </Col>
+          </Row>
+
+          {/* QC引擎选择 */}
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="qc_engine"
+                label="计算引擎"
+                initialValue={selectedQCEngine}
+                tooltip="PySCF是开源免费引擎(功能有限)，Gaussian功能完整但需要license授权"
+              >
+                <Select
+                  value={selectedQCEngine}
+                  onChange={(value) => setSelectedQCEngine(value)}
+                  disabled={!userProfile}
+                >
+                  {userProfile?.can_use_gaussian && (
+                    <Select.Option value="gaussian">
+                      <Space>
+                        <ThunderboltOutlined style={{ color: '#faad14' }} />
+                        <span>Gaussian 16</span>
+                        <Tag color="gold">推荐</Tag>
+                        <Tag color="blue">全功能</Tag>
+                      </Space>
+                    </Select.Option>
+                  )}
+                  <Select.Option value="pyscf">
+                    <Space>
+                      <ExperimentOutlined style={{ color: '#52c41a' }} />
+                      <span>PySCF</span>
+                      <Tag color="green">免费</Tag>
+                      <Tag color="cyan">开源</Tag>
+                    </Space>
+                  </Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+
+            {/* Gaussian权限提示 */}
+            {userProfile && !userProfile.can_use_gaussian && (
+              <Col span={24}>
+                <Alert
+                  message="Gaussian权限提示"
+                  description={
+                    <div>
+                      <p>您当前仅可使用 <strong>PySCF</strong> 开源引擎进行计算。</p>
+                      <p>如需使用 <strong>Gaussian 16</strong>（支持更多功能和更高精度），请联系管理员申请license权限。</p>
+                    </div>
+                  }
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  closable
+                />
+              </Col>
+            )}
           </Row>
 
           <Form.Item

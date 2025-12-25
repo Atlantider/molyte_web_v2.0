@@ -385,7 +385,7 @@ def create_qc_job(
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    创建QC计算任务
+    创建QC计算任务(包含配额检查)
 
     Args:
         job_data: QC任务创建数据
@@ -395,6 +395,48 @@ def create_qc_job(
     """
     # Check module access
     require_module_access(current_user, MODULE_QC)
+    
+    # ===== 新增: 配额检查 =====
+    # 1. 预估任务核时消耗
+    from app.services.quota_check import estimate_qc_job_hours, check_submission_quota
+    
+    # 估算原子数(简化,从SMILES长度估算,实际应解析)
+    atom_count = len(job_data.smiles) if job_data.smiles else 10
+    
+    # 判断计算类型
+    calculation_type = 'OPT'  # 默认几何优化
+    if job_data.config and 'calculation_type' in job_data.config:
+        calculation_type = job_data.config['calculation_type']
+    
+    estimated_hours = estimate_qc_job_hours(
+        basis_set=job_data.basis_set,
+        functional=job_data.functional,
+        atom_count=min(atom_count, 50),  # 限制最大值避免过度估算
+        calculation_type=calculation_type
+    )
+    
+    # 2. 检查配额是否足够
+    quota_check = check_submission_quota(
+        user=current_user,
+        db=db,
+        estimated_hours=estimated_hours,
+        min_balance_required=1.0
+    )
+    
+    if not quota_check['can_submit']:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'error': 'insufficient_quota',
+                'message': quota_check['reason'],
+                'available_quota': quota_check['available_quota'],
+                'required_quota': quota_check['required_quota'],
+                'estimated_hours': estimated_hours,
+                'debt': quota_check.get('debt', 0.0)
+            }
+        )
+    # ===== 配额检查结束 =====
+
 
     # 检查是否可以跳过 SMILES 验证
     # 条件：
@@ -460,17 +502,32 @@ def create_qc_job(
                         detail=f"无效的SMILES: {job_data.smiles}。请检查分子结构是否正确。"
                     )
             else:
-                # 尝试生成3D坐标以验证分子可以被处理
-                mol = Chem.AddHs(mol)
-                result = AllChem.EmbedMolecule(mol, randomSeed=42)
-                if result == -1:
-                    # 尝试使用随机坐标方法
-                    result = AllChem.EmbedMolecule(mol, useRandomCoords=True, maxAttempts=100, randomSeed=42)
-                if result == -1:
-                    # 某些特殊分子（如PF6-）的UFF力场不支持，需要手动处理
+                # 使用渐进式坐标生成验证SMILES
+                try:
+                    from app.utils.coordinate_generator import generate_3d_coordinates
+                    
+                    result = generate_3d_coordinates(
+                        smiles=job_data.smiles,
+                        molecule_name=job_data.molecule_name or "validation",
+                        charge=job_data.charge,
+                        multiplicity=job_data.spin_multiplicity,
+                        enable_xtb=False  # 验证阶段不需要XTB，节省时间
+                    )
+                    
+                    if result.source == 'random':
+                        logger.warning(
+                            f"⚠ SMILES {job_data.smiles} 需要随机坐标生成 "
+                            f"(quality: {result.quality}), 建议提前检查分子结构"
+                        )
+                except Exception as e:
+                    # 某些特殊分子（如PF6-）可能无法自动生成坐标
                     # 这里只发出警告，不阻止创建任务
                     # 实际的3D坐标会在任务执行时通过其他方法生成
-                    logger.warning(f"无法使用RDKit自动生成3D坐标: {job_data.smiles}，将在任务执行时尝试其他方法")
+                    logger.warning(
+                        f"无法自动生成3D坐标进行验证: {job_data.smiles}\n"
+                        f"错误: {e}\n"
+                        f"将在任务执行时尝试其他方法"
+                    )
         except ImportError:
             logger.warning("RDKit not available, skipping SMILES validation")
         except HTTPException:

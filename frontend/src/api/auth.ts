@@ -12,13 +12,13 @@ export const login = async (data: LoginRequest): Promise<LoginResponse> => {
   const formData = new URLSearchParams();
   formData.append('username', data.username);
   formData.append('password', data.password);
-  
+
   const response = await client.post<LoginResponse>('/auth/login', formData, {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
   });
-  
+
   return response.data;
 };
 
@@ -76,6 +76,8 @@ export interface UserProfile {
   concurrent_job_limit: number;
   storage_quota_gb: number;
   allowed_partitions: string[] | null;
+  // QC引擎权限
+  can_use_gaussian: boolean;  // 是否有Gaussian license使用权限
   // 核时余额系统
   balance_cpu_hours: number;        // 账户余额
   frozen_cpu_hours: number;         // 冻结核时

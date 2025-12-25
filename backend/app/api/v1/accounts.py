@@ -447,8 +447,11 @@ def get_sub_account_jobs(
 ):
     """
     获取子账号的任务列表（仅主账号可用）
+    
+    包括MD和QC任务
     """
-    from app.models.job import MDJob
+    from app.models.job import MDJob, JobStatus
+    from app.models.qc import QCJob, QCJobStatus
 
     if current_user.account_type != AccountType.MASTER_ACCOUNT.value:
         raise HTTPException(
@@ -471,36 +474,60 @@ def get_sub_account_jobs(
     # 获取子账号用户信息
     sub_user = db.query(User).filter(User.id == sub_account.user_id).first()
 
-    # 查询该子账号的所有任务
-    total = db.query(MDJob).filter(
+    # 查询该子账号的MD和QC任务
+    md_jobs = db.query(MDJob).filter(
         MDJob.user_id == sub_account.user_id,
         MDJob.is_deleted == False
-    ).count()
+    ).all()
 
-    jobs = db.query(MDJob).filter(
-        MDJob.user_id == sub_account.user_id,
-        MDJob.is_deleted == False
-    ).order_by(MDJob.created_at.desc()).offset(skip).limit(limit).all()
+    qc_jobs = db.query(QCJob).filter(
+        QCJob.user_id == sub_account.user_id
+    ).all()
+
+    # 合并任务并按时间排序
+    all_jobs = []
+    
+    for job in md_jobs:
+        all_jobs.append({
+            "id": job.id,
+            "type": "md",
+            "system_id": job.system_id,
+            "status": job.status,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "finished_at": job.finished_at,
+            "actual_cpu_hours": job.actual_cpu_hours,
+            "estimated_cpu_hours": job.estimated_cpu_hours,
+        })
+    
+    for job in qc_jobs:
+        all_jobs.append({
+            "id": job.id,
+            "type": "qc",
+            "molecule_name": job.molecule_name,
+            "status": job.status,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "finished_at": job.finished_at,
+            "actual_cpu_hours": job.actual_cpu_hours,
+            "estimated_cpu_hours": getattr(job, 'estimated_cpu_hours', None),
+        })
+    
+    # 按创建时间降序排序
+    all_jobs.sort(key=lambda x: x["created_at"], reverse=True)
+    
+    total = len(all_jobs)
+    paginated_jobs = all_jobs[skip:skip+limit]
 
     return {
         "sub_account_id": sub_account_id,
         "username": sub_user.username if sub_user else None,
         "total": total,
+        "md_total": len(md_jobs),
+        "qc_total": len(qc_jobs),
         "skip": skip,
         "limit": limit,
-        "jobs": [
-            {
-                "id": job.id,
-                "system_id": job.system_id,
-                "status": job.status,
-                "created_at": job.created_at,
-                "started_at": job.started_at,
-                "finished_at": job.finished_at,
-                "actual_cpu_hours": job.actual_cpu_hours,
-                "estimated_cpu_hours": job.estimated_cpu_hours,
-            }
-            for job in jobs
-        ]
+        "jobs": paginated_jobs
     }
 
 
@@ -513,8 +540,11 @@ def get_all_sub_accounts_jobs(
 ):
     """
     获取所有子账号的任务汇总（仅主账号可用）
+    
+    包括MD和QC任务
     """
-    from app.models.job import MDJob
+    from app.models.job import MDJob, JobStatus
+    from app.models.qc import QCJob, QCJobStatus
 
     if current_user.account_type != AccountType.MASTER_ACCOUNT.value:
         raise HTTPException(
@@ -574,4 +604,255 @@ def get_all_sub_accounts_jobs(
             }
             for job, user in jobs
         ]
+    }
+
+
+# ============ 增强功能: 使用统计和概览 ============
+
+@router.get("/my-sub-accounts/{sub_account_id}/usage-stats", response_model=dict)
+def get_sub_account_usage_stats(
+    sub_account_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取子账号的使用统计（仅主账号可用）
+    
+    包括配额使用、任务统计、CPU hours分类等
+    """
+    from app.models.job import MDJob, JobStatus
+    from app.models.qc import QCJob, QCJobStatus
+    from app.models.billing import QuotaTransaction
+    from sqlalchemy import func
+
+    if current_user.account_type != AccountType.MASTER_ACCOUNT.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only master accounts can view sub-account stats"
+        )
+
+    master_account = db.query(MasterAccount).filter(
+        MasterAccount.user_id == current_user.id
+    ).first()
+
+    sub_account = db.query(SubAccount).filter(
+        SubAccount.id == sub_account_id,
+        SubAccount.master_account_id == master_account.id
+    ).first()
+
+    if not sub_account:
+        raise HTTPException(status_code=404, detail="Sub-account not found")
+
+    # 获取子账号用户信息
+    sub_user = db.query(User).filter(User.id == sub_account.user_id).first()
+
+    # 配额统计
+    personal_quota = sub_user.balance_cpu_hours
+    allocated_quota = sub_account.allocated_quota
+    frozen_quota = sub_user.frozen_cpu_hours
+    total_available = personal_quota + allocated_quota - frozen_quota
+
+    # 计算已使用的核时（从交易记录）
+    total_consumed = db.query(func.sum(QuotaTransaction.amount)).filter(
+        QuotaTransaction.user_id == sub_user.id,
+        QuotaTransaction.type == 'consume'
+    ).scalar() or 0.0
+    total_used = abs(total_consumed)
+
+    # 总配额 = 个人 + 分配
+    total_quota = personal_quota + allocated_quota
+    usage_percentage = (total_used / total_quota * 100) if total_quota > 0 else 0
+
+    # MD任务统计
+    md_total = db.query(MDJob).filter(
+        MDJob.user_id == sub_user.id,
+        MDJob.is_deleted == False
+    ).count()
+    
+    md_completed = db.query(MDJob).filter(
+        MDJob.user_id == sub_user.id,
+        MDJob.status == JobStatus.COMPLETED,
+        MDJob.is_deleted == False
+    ).count()
+    
+    md_running = db.query(MDJob).filter(
+        MDJob.user_id == sub_user.id,
+        MDJob.status.in_([JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.SUBMITTED]),
+        MDJob.is_deleted == False
+    ).count()
+    
+    md_failed = db.query(MDJob).filter(
+        MDJob.user_id == sub_user.id,
+        MDJob.status == JobStatus.FAILED,
+        MDJob.is_deleted == False
+    ).count()
+
+    # MD任务CPU hours
+    md_cpu_hours = db.query(func.sum(MDJob.actual_cpu_hours)).filter(
+        MDJob.user_id == sub_user.id,
+        MDJob.actual_cpu_hours.isnot(None),
+        MDJob.is_deleted == False
+    ).scalar() or 0.0
+
+    # QC任务统计
+    qc_total = db.query(QCJob).filter(QCJob.user_id == sub_user.id).count()
+    
+    qc_completed = db.query(QCJob).filter(
+        QCJob.user_id == sub_user.id,
+        QCJob.status == QCJobStatus.COMPLETED
+    ).count()
+    
+    qc_running = db.query(QCJob).filter(
+        QCJob.user_id == sub_user.id,
+        QCJob.status.in_([QCJobStatus.RUNNING, QCJobStatus.QUEUED, QCJobStatus.SUBMITTED, QCJobStatus.RETRYING])
+    ).count()
+    
+    qc_failed = db.query(QCJob).filter(
+        QCJob.user_id == sub_user.id,
+        QCJob.status == QCJobStatus.FAILED
+    ).count()
+
+    # QC任务CPU hours
+    qc_cpu_hours = db.query(func.sum(QCJob.actual_cpu_hours)).filter(
+        QCJob.user_id == sub_user.id,
+        QCJob.actual_cpu_hours.isnot(None)
+    ).scalar() or 0.0
+
+    # 总任务统计
+    total_jobs = md_total + qc_total
+    total_completed = md_completed + qc_completed
+    total_running = md_running + qc_running
+    total_failed = md_failed + qc_failed
+    success_rate = (total_completed / total_jobs * 100) if total_jobs > 0 else 0
+
+    return {
+        "sub_account_id": sub_account_id,
+        "username": sub_user.username,
+        "email": sub_user.email,
+        "is_active": sub_account.is_active,
+        "quota": {
+            "personal": round(personal_quota, 2),
+            "allocated": round(allocated_quota, 2),
+            "frozen": round(frozen_quota, 2),
+            "total_available": round(total_available, 2),
+            "total_used": round(total_used, 2),
+            "total_quota": round(total_quota, 2),
+            "usage_percentage": round(usage_percentage, 1)
+        },
+        "jobs": {
+            "total": total_jobs,
+            "completed": total_completed,
+            "running": total_running,
+            "failed": total_failed,
+            "success_rate": round(success_rate, 1),
+            "md_jobs": md_total,
+            "qc_jobs": qc_total
+        },
+        "cpu_hours_breakdown": {
+            "total": round(total_used, 2),
+            "md_jobs": round(md_cpu_hours, 2),
+            "qc_jobs": round(qc_cpu_hours, 2)
+        }
+    }
+
+
+@router.get("/my-sub-accounts/overview", response_model=dict)
+def get_sub_accounts_overview(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取所有子账号的概览（仅主账号可用）
+    
+    提供快速监控仪表板，显示所有子账号的关键指标
+    """
+    from app.models.job import MDJob, JobStatus
+    from app.models.qc import QCJob, QCJobStatus
+    from app.models.billing import QuotaTransaction
+    from sqlalchemy import func
+
+    if current_user.account_type != AccountType.MASTER_ACCOUNT.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only master accounts can view overview"
+        )
+
+    master_account = db.query(MasterAccount).filter(
+        MasterAccount.user_id == current_user.id
+    ).first()
+
+    if not master_account:
+        raise HTTPException(status_code=400, detail="Master account not found")
+
+    # 获取所有子账号
+    sub_accounts = db.query(SubAccount).filter(
+        SubAccount.master_account_id == master_account.id
+    ).all()
+
+    # 主账号信息
+    master_info = {
+        "username": current_user.username,
+        "balance": round(current_user.balance_cpu_hours, 2),
+        "total_sub_accounts": len(sub_accounts),
+        "active_sub_accounts": sum(1 for sa in sub_accounts if sa.is_active),
+        "max_sub_accounts": master_account.max_sub_accounts
+    }
+
+    # 计算总分配配额
+    total_allocated = sum(sa.allocated_quota for sa in sub_accounts)
+    master_info["total_allocated"] = round(total_allocated, 2)
+
+    # 子账号概览
+    sub_accounts_summary = []
+    for sub_account in sub_accounts:
+        sub_user = db.query(User).filter(User.id == sub_account.user_id).first()
+        if not sub_user:
+            continue
+
+        # 计算已使用核时
+        total_consumed = db.query(func.sum(QuotaTransaction.amount)).filter(
+            QuotaTransaction.user_id == sub_user.id,
+            QuotaTransaction.type == 'consume'
+        ).scalar() or 0.0
+        used_cpu_hours = abs(total_consumed)
+
+        # 总可用配额
+        total_quota = sub_user.balance_cpu_hours + sub_account.allocated_quota
+        usage_percentage = (used_cpu_hours / total_quota * 100) if total_quota > 0 else 0
+
+        # 运行中的任务
+        md_active = db.query(MDJob).filter(
+            MDJob.user_id == sub_user.id,
+            MDJob.status.in_([JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.SUBMITTED]),
+            MDJob.is_deleted == False
+        ).count()
+
+        qc_active = db.query(QCJob).filter(
+            QCJob.user_id == sub_user.id,
+            QCJob.status.in_([QCJobStatus.RUNNING, QCJobStatus.QUEUED, QCJobStatus.SUBMITTED, QCJobStatus.RETRYING])
+        ).count()
+
+        active_jobs = md_active + qc_active
+
+        sub_accounts_summary.append({
+            "sub_account_id": sub_account.id,
+            "user_id": sub_user.id,
+            "username": sub_user.username,
+            "email": sub_user.email,
+            "is_active": sub_account.is_active,
+            "allocated_quota": round(sub_account.allocated_quota, 2),
+            "personal_quota": round(sub_user.balance_cpu_hours, 2),
+            "total_quota": round(total_quota, 2),
+            "used_cpu_hours": round(used_cpu_hours, 2),
+            "usage_percentage": round(usage_percentage, 1),
+            "active_jobs": active_jobs,
+            "frozen_cpu_hours": round(sub_user.frozen_cpu_hours, 2)
+        })
+
+    # 按使用率降序排序
+    sub_accounts_summary.sort(key=lambda x: x["usage_percentage"], reverse=True)
+
+    return {
+        "master_account": master_info,
+        "sub_accounts_summary": sub_accounts_summary
     }

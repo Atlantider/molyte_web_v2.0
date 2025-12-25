@@ -135,46 +135,35 @@ class BillingService:
     def can_submit_job(db: Session, user: User) -> Tuple[bool, str]:
         """
         检查用户是否可以提交任务
-
-        检查项：
-        1. 账户是否被禁用
-        2. 子账号是否被禁用
-        3. 是否有欠费
-        4. 是否有足够的配额
-        """
-        from app.models.user import AccountType
-        from app.models.organization_v2 import SubAccount
+        
+        DEPRECATED: 此方法已弃用，请使用 QuotaService.check_can_submit()
+        保留此方法仅为向后兼容，将在未来版本中移除
+        
+        新的统一配额检查应使用：
         from app.services.quota_service import QuotaService
-
-        # 管理员不限制
-        if user.role.value == "ADMIN":
-            return True, ""
-
-        # 1. 检查账户是否被禁用
-        if not user.is_active:
-            return False, "您的账户已被禁用，无法提交任务"
-
-        # 2. 检查子账号是否被禁用
-        if user.account_type == AccountType.SUB_ACCOUNT.value:
-            sub_account = db.query(SubAccount).filter(
-                SubAccount.user_id == user.id
-            ).first()
-            if sub_account and not sub_account.is_active:
-                return False, "您的子账号已被禁用，无法提交任务"
-
-        # 3. 检查欠费
-        if user.debt_cpu_hours > 0:
-            return False, f"您有 {user.debt_cpu_hours:.2f} 核时欠费，请先充值还清欠费后再提交任务"
-
-        # 4. 检查配额是否足够（至少需要 1 核时）
-        available_quota = QuotaService.get_available_quota(user, db)
-        if available_quota <= 0:
-            if user.account_type == AccountType.SUB_ACCOUNT.value:
-                return False, "您的配额已用尽，请联系主账号管理员分配更多配额或自己充值"
-            else:
-                return False, "余额不足，请先充值后再提交任务"
-
-        return True, ""
+        can_submit, message, info = QuotaService.check_can_submit(
+            user=user, 
+            estimated_hours=hours,
+            db=db
+        )
+        """
+        import warnings
+        warnings.warn(
+            "BillingService.can_submit_job() is deprecated. "
+            "Use QuotaService.check_can_submit() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        # 重定向到新的统一接口
+        from app.services.quota_service import QuotaService
+        can_submit, message, info = QuotaService.check_can_submit(
+            user=user,
+            estimated_hours=1.0,  # 默认估算
+            db=db
+        )
+        
+        return can_submit, message
     
     @staticmethod
     def generate_order_no() -> str:
@@ -243,26 +232,13 @@ class BillingService:
         # 如果 balance < 0（欠费），充值会先还债，然后增加可用余额
         user.balance_cpu_hours += order.cpu_hours
 
-        # 记录充值流水
-        recharge_trans = QuotaTransaction(
-            user_id=user.id,
-            type=TransactionType.RECHARGE.value,
-            amount=order.cpu_hours,
-            balance_before=balance_before,
-            balance_after=user.balance_cpu_hours,
-            reference_id=order.id,
-            reference_type="order",
-            description=f"充值 {order.cpu_hours:.2f} 核时"
-        )
-        db.add(recharge_trans)
-
         # 更新充值核时统计（用于核时来源追踪）
         user.recharge_cpu_hours += order.cpu_hours
 
         # 记录充值流水
         recharge_trans = QuotaTransaction(
             user_id=user.id,
-            type=TransactionType.RECHARGE.value,  # 使用枚举值
+            type=TransactionType.RECHARGE.value,
             amount=order.cpu_hours,
             balance_before=balance_before,
             balance_after=user.balance_cpu_hours,
@@ -602,4 +578,93 @@ class BillingService:
         db.commit()
 
         return True, f"结算完成，消耗 {cpu_hours:.2f} 核时，任务计数 {job.task_count}"
+
+    @staticmethod
+    def settle_qc_job(db: Session, qc_job) -> Tuple[bool, str]:
+        """
+        QC任务完成后结算
+        
+        处理独立提交的QC计算任务的计费
+        
+        Args:
+            db: 数据库会话
+            qc_job: QC任务对象
+            
+        Returns:
+            Tuple[bool, str]: (成功标志, 消息)
+        """
+        # 导入放在函数内避免循环依赖
+        from app.models.qc import QCJob
+        
+        if qc_job.billed:
+            return True, "任务已结算"
+        
+        user = db.query(User).filter(User.id == qc_job.user_id).first()
+        if not user:
+            return False, "用户不存在"
+        
+        # 管理员不扣费
+        if user.role.value == "ADMIN":
+            qc_job.billed = True
+            db.commit()
+            return True, "管理员任务免费"
+        
+        # 计算实际核时
+        cpu_hours = qc_job.actual_cpu_hours if qc_job.actual_cpu_hours and qc_job.actual_cpu_hours > 0 else 0.0
+        
+        if cpu_hours == 0:
+            # 没有核时记录，可能是复用任务或失败任务
+            qc_job.billed = True
+            db.commit()
+            return True, "无需扣费（核时为0）"
+        
+        balance_before = user.balance_cpu_hours
+        
+        # 统一的核时系统：直接从 balance_cpu_hours 扣费
+        user.balance_cpu_hours -= cpu_hours
+        
+        # 记录消费流水
+        trans = QuotaTransaction(
+            user_id=user.id,
+            type=TransactionType.CONSUME.value,
+            amount=-cpu_hours,
+            balance_before=balance_before,
+            balance_after=user.balance_cpu_hours,
+            reference_id=qc_job.id,
+            reference_type="qc_job",
+            description=f"QC任务 #{qc_job.id} ({qc_job.molecule_name}) 消耗 {cpu_hours:.2f} 核时"
+        )
+        db.add(trans)
+        
+        # 更新用户统计
+        today = date.today()
+        stats = db.query(UserUsageStats).filter(
+            UserUsageStats.user_id == user.id,
+            UserUsageStats.date == today
+        ).first()
+        
+        if not stats:
+            stats = UserUsageStats(
+                user_id=user.id,
+                date=today,
+                jobs_submitted=0,
+                jobs_completed=0,
+                jobs_failed=0,
+                jobs_cancelled=0,
+                cpu_hours_used=0.0,
+                cluster_analysis_cpu_hours=0.0,
+                cluster_analysis_task_count=0,
+                storage_used_gb=0.0,
+                max_concurrent_jobs=0
+            )
+            db.add(stats)
+        
+        stats.jobs_completed += 1
+        stats.cpu_hours_used += cpu_hours
+        
+        qc_job.billed = True
+        db.commit()
+        
+        logger.info(f"QC job {qc_job.id} settled: {cpu_hours:.2f} hours, balance: {user.balance_cpu_hours:.2f}")
+        return True, f"结算完成，消耗 {cpu_hours:.2f} 核时"
 

@@ -21,6 +21,7 @@ class QCJobStatus(str, PyEnum):
     - SUBMITTED: 用户提交，等待 Worker 拉取
     - QUEUED: Worker 已拉取，Slurm 排队等资源中
     - RUNNING: Slurm 正在执行
+    - RETRYING: 任务重试中
     - POSTPROCESSING: 后处理中
     - COMPLETED: 完成
     - FAILED: 失败
@@ -30,6 +31,7 @@ class QCJobStatus(str, PyEnum):
     SUBMITTED = "SUBMITTED"
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
+    RETRYING = "RETRYING"
     POSTPROCESSING = "POSTPROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -63,6 +65,17 @@ class QCJob(Base):
     task_type = Column(String(100), nullable=True, index=True)  # e.g., "cluster", "ion", "ligand_EC", "dimer_EC"
     # 关联的溶剂化结构 ID（用于 Cluster Analysis）
     solvation_structure_id = Column(Integer, ForeignKey("solvation_structures.id", ondelete="SET NULL"), nullable=True)
+
+    # Slurm job tracking
+    slurm_job_id = Column(String(50), index=True)
+    work_dir = Column(Text)
+    
+    # QC Engine selection
+    qc_engine = Column(String, default="gaussian", nullable=False)  # gaussian, pyscf
+    
+    # Retry mechanism
+    retry_count = Column(Integer, default=0, nullable=False)  # 后处理重试次数
+    max_retries = Column(Integer, default=3, nullable=False)  # 最大重试次数
 
     # 分子信息
     molecule_name = Column(String(255), nullable=False)

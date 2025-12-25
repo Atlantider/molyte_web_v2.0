@@ -9,7 +9,9 @@ from app.core.logger import logger
 
 # Paths
 _CLOUD_SALTS_DIR = Path("/opt/molyte_web_v1.0/data/initial_salts")
-_CAMPUS_SALTS_DIR = Path("/public/home/xiaoji/molyte_web/data/initial_salts")
+# 使用统一路径配置
+from app.core.paths import paths
+_CAMPUS_SALTS_DIR = paths.initial_salts_dir
 SALTS_DIR = _CLOUD_SALTS_DIR if _CLOUD_SALTS_DIR.exists() else _CAMPUS_SALTS_DIR
 
 

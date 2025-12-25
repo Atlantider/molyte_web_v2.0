@@ -66,6 +66,8 @@ import {
   deleteElectrolyte,
   batchDeleteElectrolytes,
   batchUpdateProject,
+  getLabelOptions,
+  type LabelOptions,
 } from '../api/electrolytes';
 import { getMDJobs, batchCreateMDJobs } from '../api/jobs';
 import { getProjects, createProject } from '../api/projects';
@@ -151,6 +153,16 @@ export default function Electrolytes() {
   const [projectModalVisible, setProjectModalVisible] = useState(false);
   const [projectForm] = Form.useForm();
 
+  // 电解液分类标签相关状态
+  const [labelOptions, setLabelOptions] = useState<LabelOptions | null>(null);
+  const [formLabels, setFormLabels] = useState<{
+    battery_type?: string;
+    anode_types?: string[];
+    cathode_types?: string[];
+    conditions?: string[];
+    electrolyte_type?: string;
+  }>({});
+
   // 加载数据
   const loadData = async () => {
     setLoading(true);
@@ -173,6 +185,8 @@ export default function Electrolytes() {
 
   useEffect(() => {
     loadData();
+    // 加载标签选项
+    getLabelOptions().then(setLabelOptions).catch(console.error);
   }, []);
 
   // 获取配方的状态分类
@@ -401,6 +415,7 @@ export default function Electrolytes() {
     setEditingElectrolyte(null);
     setCopyingElectrolyte(null);
     form.resetFields();
+    setFormLabels({});  // 重置标签选择
   };
 
   // 打开新建项目对话框
@@ -500,6 +515,8 @@ export default function Electrolytes() {
         nsteps_nvt: 10000000,
         timestep: 1.0,
         force_field: 'OPLS',
+        // 电解液分类标签
+        labels: Object.keys(formLabels).length > 0 ? formLabels : undefined,
       };
 
       console.log('=== 创建电解质请求数据 ===');
@@ -1189,8 +1206,8 @@ export default function Electrolytes() {
                       jobs={jobs}
                       onEdit={(e) => !selectMode && handleOpenModal(e, false)}
                       onCopy={(e) => !selectMode && handleOpenModal(e, true)}
-                      onDelete={!selectMode ? handleDelete : () => {}}
-                      onCreateJob={!selectMode ? handleCreateJob : () => {}}
+                      onDelete={!selectMode ? handleDelete : () => { }}
+                      onCreateJob={!selectMode ? handleCreateJob : () => { }}
                     />
                   </div>
                 </div>
@@ -1368,8 +1385,8 @@ export default function Electrolytes() {
               {copyingElectrolyte
                 ? '复制电解质配方'
                 : editingElectrolyte
-                ? '编辑电解质配方'
-                : '创建新电解质配方'}
+                  ? '编辑电解质配方'
+                  : '创建新电解质配方'}
             </span>
           </Space>
         }
@@ -2429,11 +2446,11 @@ export default function Electrolytes() {
               <Descriptions.Item label="状态">
                 <Tag color={
                   getElectrolyteCategory(viewingElectrolyte) === 'running' ? 'processing' :
-                  getElectrolyteCategory(viewingElectrolyte) === 'completed' ? 'success' :
-                  'default'
+                    getElectrolyteCategory(viewingElectrolyte) === 'completed' ? 'success' :
+                      'default'
                 }>
                   {getElectrolyteCategory(viewingElectrolyte) === 'running' ? '进行中' :
-                   getElectrolyteCategory(viewingElectrolyte) === 'completed' ? '已完成' : '草稿'}
+                    getElectrolyteCategory(viewingElectrolyte) === 'completed' ? '已完成' : '草稿'}
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="关联任务">

@@ -1727,46 +1727,111 @@ async def update_sub_account(
 # ============ Slurm Partition Management ============
 
 @router.get("/partitions")
-async def get_all_partitions(
+async def get_partitions(
     admin: User = Depends(get_current_admin_user)
 ):
     """
-    Get all available Slurm partitions (admin only)
+    Get available Slurm partitions (admin only)
 
-    This endpoint returns ALL partitions without filtering,
-    used for admin to assign partition permissions to users.
+    Args:
+        admin: Current admin user
+
+    Returns:
+        List of available partitions
     """
     try:
         partitions = list_partitions()
-
-        return [
-            {
-                "name": p.name,
-                "state": p.state,
-                "total_nodes": p.total_nodes,
-                "available_nodes": p.available_nodes,
-                "total_cpus": p.total_cpus,
-                "available_cpus": p.available_cpus,
-                "max_time": p.max_time,
-            }
-            for p in partitions
-        ]
+        return {"partitions": partitions}
     except Exception as e:
-        # 如果 Slurm 命令失败，返回默认分区列表
-        return [
+        logger.error(f"Failed to list partitions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list partitions")
+
+
+# ============ Permission Management Endpoints ============
+
+@router.put("/users/{user_id}/gaussian-permission")
+async def set_gaussian_permission(
+    user_id: int,
+    can_use: bool,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin_user)
+):
+    """
+    设置用户Gaussian使用权限 (admin only)
+    
+    Gaussian引擎需要商业许可证，只有授权用户才能使用。
+    
+    Args:
+        user_id: 用户ID
+        can_use: 是否允许使用Gaussian
+        request: FastAPI request
+        db: 数据库会话
+        admin: 当前管理员
+        
+    Returns:
+        更新结果
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    old_permission = user.can_use_gaussian
+    user.can_use_gaussian = can_use
+    db.commit()
+    
+    # 记录审计日志
+    create_audit_log(
+        db=db,
+        user=admin,
+        action="update_gaussian_permission",
+        resource_type="user",
+        resource_id=user.id,
+        details={
+            "username": user.username,
+            "old_permission": old_permission,
+            "new_permission": can_use
+        },
+        request=request
+    )
+    
+    logger.info(f"Admin {admin.id} set user {user_id} Gaussian permission: {can_use}")
+    
+    return {
+        "message": f"Gaussian permission {'granted' if can_use else 'revoked'} successfully",
+        "user_id": user_id,
+        "username": user.username,
+        "can_use_gaussian": can_use
+    }
+
+
+@router.get("/users/gaussian-users")
+async def get_gaussian_users(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin_user)
+):
+    """
+    获取所有有Gaussian权限的用户列表 (admin only)
+    
+    Args:
+        db: 数据库会话
+        admin: 当前管理员
+        
+    Returns:
+        有Gaussian权限的用户列表
+    """
+    users = db.query(User).filter(User.can_use_gaussian == True).all()
+    
+    return {
+        "total": len(users),
+        "users": [
             {
-                "name": "cpu",
-                "state": "up",
-                "total_nodes": 10,
-                "available_nodes": 8,
-                "total_cpus": 320,
-                "available_cpus": 256,
-                "max_time": "7-00:00:00",
-            },
-            {
-                "name": "gpu",
-                "state": "up",
-                "total_nodes": 4,
+                "id": u.id,
+                "username": u.username,
+                "email": u.email,
+                "role": u.role.value,
+                "organization": u.organization
+            }
                 "available_nodes": 3,
                 "total_cpus": 128,
                 "available_cpus": 96,

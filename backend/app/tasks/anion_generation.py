@@ -51,9 +51,10 @@ def process_anion_generation_job(job_id: int):
         job.started_at = datetime.utcnow()
         job.message = "Ready for polling_worker to process (parse input, create QC job, run calculations)"
 
-        # Set up work directory path (but don't create it yet)
-        work_base_path = f"/public/home/xiaoji/molyte_web/data/qc_work/anion_{job.job_id}"
-        job.work_dir = work_base_path
+        # Set up work directory path (but don't create        # 使用统一路径配置
+        from app.core.paths import paths
+        work_base_path = paths.qc_work_dir / f"anion_{job.job_id}"
+        job.work_dir = str(work_base_path) # Convert Path object to string for database storage
 
         db.commit()
 
@@ -98,44 +99,57 @@ def _parse_input_and_generate_3d(job: AnionGenerationJob) -> dict:
         else:
             raise ValueError(f"Unknown identifier type: {job.identifier_type}")
 
-        # Generate 3D structure from SMILES
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            raise ValueError(f"Failed to parse SMILES: {smiles}")
+        # 使用渐进式坐标生成
+        try:
+            from app.utils.coordinate_generator import generate_3d_coordinates
+            
+            logger.info(f"Generating 3D coordinates for anion: {smiles}")
+            
+            coord_result = generate_3d_coordinates(
+                smiles=smiles,
+                molecule_name=job.anion_name,
+                charge=job.charge,
+                multiplicity=1,  # 大多数阴离子是闭壳层
+                enable_xtb=True
+            )
+            
+            if coord_result.source == 'random':
+                logger.warning(
+                    f"⚠ Anion {job.anion_name} 使用随机坐标生成\n"
+                    f"   质量: {coord_result.quality}\n"
+                    f"   最小距离: {coord_result.min_distance:.2f} Å\n"
+                    f"   建议: 人工检查结构合理性"
+                )
+            else:
+                logger.info(f"✓ Anion坐标生成成功: {coord_result.source} (quality: {coord_result.quality})")
+            
+            # 从XYZ内容解析坐标
+            xyz_lines = coord_result.xyz_content.strip().split('\n')
+            coords = []
+            mol = Chem.MolFromSmiles(smiles)
+            mol = Chem.AddHs(mol)
+            
+            for i, line in enumerate(xyz_lines[2:]):  # 跳过前两行
+                parts = line.split()
+                if len(parts) >= 4:
+                    coords.append({
+                        'idx': i,
+                        'symbol': parts[0],
+                        'x': float(parts[1]),
+                        'y': float(parts[2]),
+                        'z': float(parts[3])
+                    })
 
-        # Add hydrogens
-        mol = Chem.AddHs(mol)
-
-        # Generate 3D coordinates
-        result = AllChem.EmbedMolecule(mol, randomSeed=42)
-        if result == -1:
-            # If embedding fails, try with random coordinates
-            logger.warning("EmbedMolecule failed, trying with random coordinates")
-            result = AllChem.EmbedMolecule(mol, useRandomCoords=True, maxAttempts=100, randomSeed=42)
-
-        if result == -1:
-            raise RuntimeError("Failed to generate 3D coordinates for molecule")
-
-        # Optimize with UFF force field
-        AllChem.UFFOptimizeMolecule(mol)
-
-        # Extract coordinates
-        conf = mol.GetConformer()
-        coords = []
-        for i in range(mol.GetNumAtoms()):
-            atom = mol.GetAtomWithIdx(i)
-            pos = conf.GetAtomPosition(i)
-            coords.append({
-                'idx': i,
-                'symbol': atom.GetSymbol(),
-                'x': pos.x,
-                'y': pos.y,
-                'z': pos.z
-            })
-
-        return {
-            'mol': mol,
-            'smiles': smiles,
+            return {
+                'mol': mol,
+                'smiles': smiles,
+                'coords': coords,
+                'coordinate_source': coord_result.source,
+                'coordinate_quality': coord_result.quality
+            }
+            
+        except Exception as e:
+            raise RuntimeError(f"坐标生成失败: {str(e)}")
             'coords': coords
         }
 

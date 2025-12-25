@@ -1,9 +1,9 @@
 """
 计费和充值 API 端点
 """
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, status, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,13 @@ from app.models.billing import RechargeOrder, QuotaTransaction, PaymentStatus, P
 from app.services.billing import BillingService
 from app.utils.audit import create_audit_log
 from app.core.logger import logger
+# Import error handling
+from app.core.errors import (
+    not_found_error,
+    invalid_input_error,
+    APIError,
+    ErrorCode
+)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -98,7 +105,7 @@ async def get_balance(
     """获取当前用户余额信息"""
     balance_info = BillingService.get_user_balance(db, current_user.id)
     if not balance_info:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise not_found_error("用户", current_user.id)
 
     # 获取用户的有效定价（优先使用用户自定义价格）
     balance_info["price_per_hour"] = BillingService.get_cpu_hour_price(db, current_user.id)
@@ -110,11 +117,29 @@ async def check_can_submit(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """检查用户是否可以提交任务"""
-    can_submit, reason = BillingService.can_submit_job(db, current_user)
+    """
+    检查用户是否可以提交任务（使用统一配额系统）
+    
+    Returns:
+        包含详细配额信息的响应
+    """
+    from app.services.quota_service import QuotaService
+    
+    # 使用新的统一配额检查（估算1核时）
+    can_submit, message, info = QuotaService.check_can_submit(
+        user=current_user,
+        estimated_hours=1.0,
+        db=db
+    )
+    
     return {
         "can_submit": can_submit,
-        "reason": reason
+        "message": message,
+        "balance": info.get("balance", 0),
+        "available": info.get("available", 0),
+        "running_jobs": info.get("running_jobs", 0),
+        "today_jobs": info.get("today_jobs", 0),
+        "warnings": info.get("warnings", {})
     }
 
 
@@ -130,9 +155,9 @@ async def create_order(
     # 验证最低充值金额
     min_amount = float(BillingService.get_config(db, 'min_recharge_amount', '10'))
     if request.amount < min_amount:
-        raise HTTPException(
-            status_code=400,
-            detail=f"最低充值金额为 ¥{min_amount}"
+        raise invalid_input_error(
+            message=f"最低充值金额为 ¥{min_amount}",
+            field="amount"
         )
 
     # 映射支付方式
@@ -228,15 +253,19 @@ async def simulate_payment(
     ).first()
 
     if not order:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise not_found_error("订单", request.order_id)
 
     if order.payment_status != PaymentStatus.PENDING:
-        raise HTTPException(status_code=400, detail=f"订单状态异常: {order.payment_status.value}")
+        raise APIError(
+            ErrorCode.INVALID_STATE,
+            f"订单状态异常: {order.payment_status.value}",
+            400
+        )
 
     success, message = BillingService.complete_payment(db, order.id)
 
     if not success:
-        raise HTTPException(status_code=400, detail=message)
+        raise APIError(ErrorCode.INTERNAL_ERROR, message, 500)
 
     # 获取更新后的余额
     balance_info = BillingService.get_user_balance(db, current_user.id)
@@ -442,9 +471,9 @@ async def admin_grant_cpu_hours(
 ):
     """管理员赠送核时给用户（区别于调整余额）"""
     # 获取目标用户信息
-    target_user = db.query(User).filter(User.id == request.user_id).first()
+    target_user: Optional[User] = db.query(User).filter(User.id == request.user_id).first()
     if not target_user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise not_found_error("用户", request.user_id)
 
     success, message = BillingService.admin_grant_cpu_hours(
         db=db,

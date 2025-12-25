@@ -47,13 +47,13 @@ def get_available_anions_from_initial_salts() -> set:
     """
     anions = set()
 
-    # 尝试从校园网和腾讯云两个位置查找 initial_salts
-    salts_dirs = [
-        Path("/public/home/xiaoji/molyte_web/data/initial_salts"),
-        Path("/opt/molyte_web_v1.0/data/initial_salts"),
+    # 使用统一路径配置
+    from app.core.paths import paths
+    search_paths = [
+        paths.initial_salts_dir,
     ]
 
-    for salts_dir in salts_dirs:
+    for salts_dir in search_paths:
         if not salts_dir.exists():
             continue
 

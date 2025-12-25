@@ -29,6 +29,7 @@ import { getElectrolyte } from '../api/electrolytes';
 import { getMDJob, updateMDJobConfig, submitJobToCluster, createMDJob } from '../api/jobs';
 import { checkCanSubmit } from '../api/billing';
 import { checkDuplicateCalculations, MoleculeCheckResult, DuplicateCheckResponse } from '../api/qc';
+import { getPartitions, getSlurmSuggestion, type PartitionInfo } from '../api/slurm';
 import { useThemeStore } from '../stores/themeStore';
 
 const { Title, Text } = Typography;
@@ -67,6 +68,8 @@ export default function JobSubmit() {
   // 重复计算检查状态
   const [duplicateCheckResult, setDuplicateCheckResult] = useState<DuplicateCheckResponse | null>(null);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  // Slurm分区状态
+  const [partitions, setPartitions] = useState<PartitionInfo[]>([]);
 
   // 加载任务和配方信息
   useEffect(() => {
@@ -82,6 +85,15 @@ export default function JobSubmit() {
 
         const electrolyteData = await getElectrolyte(jobData.system_id);
         setElectrolyte(electrolyteData);
+
+        // 加载Slurm分区信息
+        try {
+          const partitionsData = await getPartitions();
+          setPartitions(partitionsData);
+        } catch (err) {
+          console.error('加载分区信息失败:', err);
+          setPartitions([{ name: 'cpu', state: 'up', total_nodes: 0, available_nodes: 0, total_cpus: 0, available_cpus: 0 }]);
+        }
 
         // 设置表单值（不包括 job_name，因为 job_name 是自动生成的，不能修改）
         if (jobData.config) {
@@ -313,6 +325,12 @@ export default function JobSubmit() {
           freq_trj_npt: values.freq_trj_npt,
           freq_trj_nvt: values.freq_trj_nvt,
           thermo_freq: values.thermo_freq,
+          // Slurm资源配置
+          slurm_partition: values.slurm_partition,
+          slurm_nodes: values.slurm_nodes,
+          slurm_ntasks: values.slurm_ntasks,
+          slurm_cpus_per_task: values.slurm_cpus_per_task,
+          slurm_time: values.slurm_time,
           submit_to_cluster: false, // 新任务默认不提交
           qc_options: qcOptions,
         };
@@ -321,9 +339,15 @@ export default function JobSubmit() {
         message.success(`已创建新任务：${newJobName}`);
         navigate(`/workspace/liquid-electrolyte/md/${newJob.id}/submit`);
       } else {
-        // 未提交的任务：直接更新（包含QC配置）
+        // 未提交的任务：直接更新（包含QC配置和Slurm配置）
         const updateData = {
           ...values,
+          // Slurm资源配置
+          slurm_partition: values.slurm_partition,
+          slurm_nodes: values.slurm_nodes,
+          slurm_ntasks: values.slurm_ntasks,
+          slurm_cpus_per_task: values.slurm_cpus_per_task,
+          slurm_time: values.slurm_time,
           // 如果启用QC，确保QC配置字段被包含
           ...(job?.config?.qc_enabled && {
             qc_accuracy_level: values.qc_accuracy_level || job.config?.qc_accuracy_level,
@@ -518,6 +542,37 @@ export default function JobSubmit() {
               <InputNumber min={0} step={0.1} style={{ width: '100%' }} />
             </Form.Item>
 
+            <Form.Item
+              label="ECC 电荷缩放"
+              name="use_ecc"
+              valuePropName="checked"
+              tooltip="Electronic Continuum Correction: 对离子电荷应用缩放系数以补偿电子极化效应"
+            >
+              <Switch />
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) => prevValues.use_ecc !== currentValues.use_ecc}
+            >
+              {({ getFieldValue }) =>
+                getFieldValue('use_ecc') ? (
+                  <Form.Item
+                    label="ECC 缩放系数"
+                    name="ecc_factor"
+                    initialValue={0.8}
+                    tooltip="推荐值: 0.75 或 0.8。所有离子原子的电荷将乘以此系数"
+                  >
+                    <Select style={{ width: '100%' }}>
+                      <Select.Option value={0.75}>0.75 (强极化环境推荐)</Select.Option>
+                      <Select.Option value={0.8}>0.8 (常用值)</Select.Option>
+                      <Select.Option value={0.85}>0.85 (弱极化环境)</Select.Option>
+                    </Select>
+                  </Form.Item>
+                ) : null
+              }
+            </Form.Item>
+
             <Divider>输出频率设置</Divider>
 
             <Form.Item
@@ -542,6 +597,65 @@ export default function JobSubmit() {
               rules={[{ required: true, message: '请输入输出频率' }]}
             >
               <InputNumber min={0} style={{ width: '100%' }} />
+            </Form.Item>
+
+            <Divider>Slurm 资源配置</Divider>
+
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  label="队列/分区"
+                  name="slurm_partition"
+                  rules={[{ required: true, message: '请选择队列' }]}
+                >
+                  <Select placeholder="选择队列">
+                    {partitions.map(p => (
+                      <Select.Option key={p.name} value={p.name}>
+                        {p.name} {p.state !== 'up' && '(不可用)'}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  label="节点数"
+                  name="slurm_nodes"
+                  rules={[{ required: true, message: '请输入节点数' }]}
+                >
+                  <InputNumber min={1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  label="任务数"
+                  name="slurm_ntasks"
+                  rules={[{ required: true, message: '请输入任务数' }]}
+                >
+                  <InputNumber min={1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  label="每任务CPU数"
+                  name="slurm_cpus_per_task"
+                  rules={[{ required: true, message: '请输入CPU数' }]}
+                >
+                  <InputNumber min={1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Form.Item
+              label="时间限制 (分钟)"
+              name="slurm_time"
+              rules={[{ required: true, message: '请输入时间限制' }]}
+              tooltip="任务运行的最大时间限制（分钟）"
+            >
+              <InputNumber min={1} style={{ width: '100%' }} />
             </Form.Item>
 
             <Form.Item>
@@ -577,6 +691,21 @@ export default function JobSubmit() {
             </Descriptions.Item>
             <Descriptions.Item label="热力学输出频率">
               {job.config?.thermo_freq?.toLocaleString() || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="队列/分区" span={2}>
+              {job.config?.slurm_partition || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="节点数">
+              {job.config?.slurm_nodes || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="任务数">
+              {job.config?.slurm_ntasks || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="每任务CPU数">
+              {job.config?.slurm_cpus_per_task || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="时间限制">
+              {job.config?.slurm_time || '-'} 分钟
             </Descriptions.Item>
           </Descriptions>
         )}
@@ -884,23 +1013,23 @@ export default function JobSubmit() {
                 <Descriptions.Item label="精度等级">
                   <Tag color={
                     currentAccuracyLevel === 'fast' ? 'green' :
-                    currentAccuracyLevel === 'standard' ? 'blue' :
-                    currentAccuracyLevel === 'accurate' ? 'orange' : 'purple'
+                      currentAccuracyLevel === 'standard' ? 'blue' :
+                        currentAccuracyLevel === 'accurate' ? 'orange' : 'purple'
                   }>
                     {currentAccuracyLevel === 'fast' ? '快速' :
-                     currentAccuracyLevel === 'standard' ? '标准' :
-                     currentAccuracyLevel === 'accurate' ? '精确' : '自定义'}
+                      currentAccuracyLevel === 'standard' ? '标准' :
+                        currentAccuracyLevel === 'accurate' ? '精确' : '自定义'}
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label="默认溶剂模型">
                   <Tag color={
                     currentSolventModel === 'gas' ? 'default' :
-                    currentSolventModel === 'pcm' ? 'blue' :
-                    currentSolventModel === 'smd' ? 'cyan' : 'orange'
+                      currentSolventModel === 'pcm' ? 'blue' :
+                        currentSolventModel === 'smd' ? 'cyan' : 'orange'
                   }>
                     {currentSolventModel === 'gas' ? '气相' :
-                     currentSolventModel === 'pcm' ? 'PCM' :
-                     currentSolventModel === 'smd' ? 'SMD' : '自定义'}
+                      currentSolventModel === 'pcm' ? 'PCM' :
+                        currentSolventModel === 'smd' ? 'SMD' : '自定义'}
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label="智能推荐">
@@ -929,7 +1058,7 @@ export default function JobSubmit() {
             {duplicateCheckResult && (
               <Alert
                 type={duplicateCheckResult.existing_count === duplicateCheckResult.total_molecules ? 'success' :
-                      duplicateCheckResult.existing_count > 0 ? 'info' : 'warning'}
+                  duplicateCheckResult.existing_count > 0 ? 'info' : 'warning'}
                 showIcon
                 icon={duplicateCheckResult.existing_count > 0 ? <CheckCircleOutlined /> : <SyncOutlined />}
                 style={{ marginBottom: 16 }}
@@ -937,8 +1066,8 @@ export default function JobSubmit() {
                   duplicateCheckResult.existing_count === duplicateCheckResult.total_molecules
                     ? `所有 ${duplicateCheckResult.total_molecules} 个分子都已有计算结果，将直接复用！`
                     : duplicateCheckResult.existing_count > 0
-                    ? `${duplicateCheckResult.existing_count} 个分子已有结果（将复用），${duplicateCheckResult.new_count} 个分子需要新计算`
-                    : `${duplicateCheckResult.total_molecules} 个分子都需要新计算`
+                      ? `${duplicateCheckResult.existing_count} 个分子已有结果（将复用），${duplicateCheckResult.new_count} 个分子需要新计算`
+                      : `${duplicateCheckResult.total_molecules} 个分子都需要新计算`
                 }
                 description={
                   duplicateCheckResult.existing_count > 0 && (

@@ -24,11 +24,14 @@ class ElectrolyteSystem(Base):
     solvents = Column(JSONB)
 
     # Simulation parameters
-    temperature = Column(Float, default=298.15)
+    temperature = Column(Float, default=298.15)  # Deprecated: 温度应在MD任务中设置
     pressure = Column(Float, default=1.0)
     density = Column(Float)
     concentration = Column(Float)
     box_size = Column(Float)
+    
+    # 电解液分类标签 (用于ML)
+    labels = Column(JSONB, default={})  # {battery_type, anode_types, cathode_types, conditions, electrolyte_type}
 
     # MD parameters
     nsteps_npt = Column(Integer, default=5000000)

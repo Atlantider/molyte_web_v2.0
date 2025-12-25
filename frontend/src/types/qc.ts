@@ -62,6 +62,8 @@ export interface QCJob {
   deleted_at?: string;
   // CPU 核时（真实的 Slurm CPUTimeRAW，单位：小时）
   actual_cpu_hours?: number;
+  // QC引擎选择
+  qc_engine?: string;  // gaussian, pyscf
 }
 
 // 精度等级
@@ -112,6 +114,8 @@ export interface QCJobCreate {
   slurm_partition?: string;
   slurm_cpus?: number;
   slurm_time?: number;
+  // QC引擎选择
+  qc_engine?: string;  // gaussian, pyscf (默认gaussian)
 }
 
 // 批量创建QC任务

@@ -32,6 +32,7 @@ import {
   SyncOutlined,
   LockOutlined,
   WalletOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import type { MDJob, ElectrolyteSystem } from '../types';
 import { JobStatus } from '../types';
@@ -42,7 +43,7 @@ import MSDCalculatorNature from '../components/MSDCalculatorNature';
 import SolvationStructureNature from '../components/SolvationStructureNature';
 import JobBasicInfo from '../components/JobBasicInfo';
 import COSErrorHandler from '../components/COSErrorHandler';
-import { getMDJob, resubmitMDJob, getJobSlurmStatus, syncJobStatus, type SlurmJobStatus } from '../api/jobs';
+import { getMDJob, resubmitMDJob, cancelMDJob, getJobSlurmStatus, syncJobStatus, type SlurmJobStatus } from '../api/jobs';
 import { getElectrolyte } from '../api/electrolytes';
 import { translateError } from '../utils/errorTranslator';
 import { extractCOSErrorFromAxios } from '../utils/cosErrorHandler';
@@ -242,6 +243,31 @@ export default function JobDetail() {
     });
   };
 
+  // 取消任务
+  const handleCancel = async () => {
+    if (!id) return;
+
+    Modal.confirm({
+      title: '确认取消任务',
+      content: '确定要取消这个任务吗？取消后任务将停止运行。',
+      okText: '确认',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          setLoading(true);
+          await cancelMDJob(Number(id));
+          message.success('任务已取消');
+          await loadJobDetail();
+        } catch (error: any) {
+          message.error('取消任务失败: ' + (error.response?.data?.detail || error.message));
+        } finally {
+          setLoading(false);
+        }
+      },
+    });
+  };
+
   if (loading) {
     return (
       <div style={{
@@ -328,13 +354,22 @@ export default function JobDetail() {
                   </Button>
                 </Tooltip>
               )}
+              {(job.status === JobStatus.QUEUED || job.status === JobStatus.RUNNING) && (
+                <Button
+                  danger
+                  icon={<StopOutlined />}
+                  onClick={handleCancel}
+                  loading={loading}
+                >
+                  取消任务
+                </Button>
+              )}
               {(job.status === JobStatus.FAILED || job.status === JobStatus.CANCELLED) && (
                 <Button
                   type="primary"
                   icon={<RedoOutlined />}
                   onClick={handleResubmit}
-                  loading={loading}
-                >
+                  loading={loading}>
                   重新提交
                 </Button>
               )}
@@ -451,8 +486,8 @@ export default function JobDetail() {
                     style={{
                       fontSize: 14,
                       color: slurmStatus.status === 'RUNNING' ? '#1890ff' :
-                             slurmStatus.status === 'COMPLETED' ? '#52c41a' :
-                             slurmStatus.status === 'FAILED' ? '#ff4d4f' : '#666'
+                        slurmStatus.status === 'COMPLETED' ? '#52c41a' :
+                          slurmStatus.status === 'FAILED' ? '#ff4d4f' : '#666'
                     }}
                   >
                     {slurmStatus.status}

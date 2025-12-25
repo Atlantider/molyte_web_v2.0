@@ -206,6 +206,14 @@ class MolyteWrapper:
             bool: 是否成功
         """
         import shutil
+        from app.utils.ecc import apply_ecc_to_lt_content
+
+        # 检查是否启用ECC
+        use_ecc = job_data.get("use_ecc", False)
+        ecc_factor = job_data.get("ecc_factor", 0.8)
+        
+        if use_ecc:
+            logger.info(f"ECC enabled with factor {ecc_factor}")
 
         # 收集需要的离子名称（原始名称和去掉+/-的名称）
         required_ions = {}  # {display_name: file_name}
@@ -239,8 +247,21 @@ class MolyteWrapper:
 
                 if src_file.exists():
                     try:
-                        shutil.copy2(src_file, dst_file)
-                        logger.info(f"Copied {src_file.name} to {dst_file.name}")
+                        if ext == '.lt' and use_ecc:
+                            # 对LT文件应用ECC电荷缩放
+                            with open(src_file, 'r', encoding='utf-8') as f:
+                                original_content = f.read()
+                            
+                            scaled_content = apply_ecc_to_lt_content(original_content, ecc_factor)
+                            
+                            with open(dst_file, 'w', encoding='utf-8') as f:
+                                f.write(scaled_content)
+                            
+                            logger.info(f"Applied ECC ({ecc_factor}) to {src_file.name} -> {dst_file.name}")
+                        else:
+                            # 普通复制
+                            shutil.copy2(src_file, dst_file)
+                            logger.info(f"Copied {src_file.name} to {dst_file.name}")
                     except Exception as e:
                         logger.error(f"Failed to copy {src_file}: {e}")
                         return False

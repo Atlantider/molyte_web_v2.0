@@ -37,9 +37,17 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
-    # File paths
-    QC_WORK_DIR: str = "/public/home/xiaoji/molyte_web/data/qc_work"
-    INITIAL_SALTS_DIR: str = "/public/home/xiaoji/molyte_web/data/initial_salts"
+    # File paths - 使用统一路径配置
+    # 保留这些属性以兼容现有代码,但从paths获取值
+    @property
+    def QC_WORK_DIR(self) -> str:
+        from app.core.paths import paths
+        return str(paths.qc_work_dir)
+    
+    @property
+    def INITIAL_SALTS_DIR(self) -> str:
+        from app.core.paths import paths
+        return str(paths.initial_salts_dir)
 
     # SMS Settings (Aliyun)
     ALIYUN_SMS_ACCESS_KEY: str = ""

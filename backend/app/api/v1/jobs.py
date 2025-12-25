@@ -26,6 +26,7 @@ from app.schemas.accuracy_level import (
     get_all_accuracy_levels
 )
 from app.services.quota_service import QuotaService
+from app.utils.job_estimator import estimate_job_cpu_hours
 
 router = APIRouter()
 
@@ -321,13 +322,38 @@ def create_md_job(
             detail="Not enough permissions"
         )
 
-    # Check user quota
-    has_quota, message = QuotaService.check_quota(current_user, 1.0, db)
-    if not has_quota:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=message
-        )
+    # Estimate CPU hours for this job
+    estimated_hours = estimate_job_cpu_hours(job_data)
+    
+    # Check user quota using unified service (includes balance, concurrent, daily limits)
+    from app.core.errors import (
+        insufficient_balance_error,
+        concurrent_limit_error,
+        daily_limit_error
+    )
+    
+    can_submit, message, info = QuotaService.check_can_submit(
+        user=current_user,
+        estimated_hours=estimated_hours,
+        db=db,
+        job_type="md"
+    )
+    
+    if not can_submit:
+        # Determine specific error type based on info
+        if "limit" in info:
+            if "running_jobs" in info:
+                raise concurrent_limit_error(info["running_jobs"], info["limit"])
+            elif "today_jobs" in info:
+                raise daily_limit_error(info["today_jobs"], info["limit"])
+        elif "required" in info:
+            raise insufficient_balance_error(info["required"], info.get("available", 0))
+        else:
+            # Generic error
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=message
+            )
 
     # 生成任务名称（格式：{配方名}-MD{序号}-{温度}K）
     job_name = generate_job_name(db, electrolyte_system=system, temperature=job_data.temperature)
@@ -465,39 +491,25 @@ def batch_create_md_jobs(
         batch_data: 批量创建请求数据（包含system_ids和任务配置）
         db: 数据库会话
         current_user: 当前用户
-
-    Returns:
-        批量创建结果
-    """
-    from fastapi.responses import JSONResponse
-
-    # 检查用户配额
-    has_quota, message = QuotaService.check_quota(current_user, 1.0, db)
-    if not has_quota:
+            if "today_jobs" in info:
+                # Check if adding these jobs would exceed daily limit
+                remaining = info["limit"] - info["today_jobs"]
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "message": f"批量创建{len(batch_data.system_ids)}个任务将超过每日限制（剩余配额：{remaining}）",
+                        "code": "DAILY_LIMIT_EXCEEDED",
+                        "requested": len(batch_data.system_ids),
+                        "remaining": remaining
+                    }
+                )
         return JSONResponse(
-            status_code=403,
+            status_code=400,
             content={
                 "success": False,
                 "message": message,
-                "quota_exceeded": True
-            }
-        )
-
-    # 检查批量创建是否会超过每日任务限制
-    quota_details = quota_check.get("details", {})
-    today_jobs = quota_details.get("today_jobs", 0)
-    daily_limit = quota_details.get("daily_limit", 999)
-    remaining = daily_limit - today_jobs
-
-    if len(batch_data.system_ids) > remaining:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "success": False,
-                "message": f"批量创建 {len(batch_data.system_ids)} 个任务将超过每日限制（剩余配额：{remaining}）",
-                "quota_exceeded": True,
-                "requested": len(batch_data.system_ids),
-                "remaining": remaining
+                "code": "QUOTA_CHECK_FAILED"
             }
         )
 

@@ -18,6 +18,7 @@ from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.qc import QCJob, QCJobStatus
 from app.core.config import settings
+from app.core.paths import paths  # 导入统一路径配置
 from app.schemas.qc import (
     QCAccuracyLevel,
     SolventModel,
@@ -50,21 +51,21 @@ def get_predefined_coordinates(smiles: str, molecule_name: str = ""):
 
     返回格式: [(atom_symbol, x, y, z), ...]
     """
-    from pathlib import Path
-    from app.core.config import settings
+    if not molecule_name:
+        return None
 
-    # 尝试从分子名称匹配PDB文件
-    initial_salts_path = settings.MOLYTE_INITIAL_SALTS_PATH
+    # 使用统一路径配置
+    salts_dir = paths.initial_salts_dir
 
     # 清理分子名称（去除+/-符号）
     clean_name = molecule_name.replace("+", "").replace("-", "").strip()
 
     # 可能的PDB文件路径
     possible_paths = [
-        initial_salts_path / f"{clean_name}.pdb",
-        initial_salts_path / f"{molecule_name}.pdb",
-        initial_salts_path / f"{molecule_name.upper()}.pdb",
-        initial_salts_path / f"{molecule_name.lower()}.pdb",
+        salts_dir / f"{clean_name}.pdb",
+        salts_dir / f"{molecule_name}.pdb",
+        salts_dir / f"{molecule_name.upper()}.pdb",
+        salts_dir / f"{molecule_name.lower()}.pdb",
     ]
 
     for pdb_path in possible_paths:
@@ -78,7 +79,7 @@ def get_predefined_coordinates(smiles: str, molecule_name: str = ""):
                 logger.warning(f"Failed to parse PDB file {pdb_path}: {e}")
                 continue
 
-    logger.debug(f"No PDB file found for {molecule_name} in {initial_salts_path}")
+    logger.debug(f"No PDB file found for {molecule_name} in {salts_dir}")
     return None
 
 
@@ -423,49 +424,62 @@ def generate_gaussian_input(job: QCJob, work_dir: Path, pdb_content: str = None)
             for atom_symbol, x, y, z in coords:
                 gjf_content += f" {atom_symbol:<2}  {x:>12.6f}  {y:>12.6f}  {z:>12.6f}\n"
         else:
-            # 从SMILES生成3D坐标
-            try:
-                from rdkit import Chem
-                from rdkit.Chem import AllChem
-
-                mol = Chem.MolFromSmiles(job.smiles)
-                if mol:
-                    mol = Chem.AddHs(mol)
-
-                    # 尝试多种方法生成3D坐标
-                    result = AllChem.EmbedMolecule(mol, randomSeed=42)
-
-                    if result == -1:
-                        # 第一次失败，尝试使用随机坐标
-                        logger.warning(f"First attempt failed, trying with random coords for {job.smiles}")
-                        result = AllChem.EmbedMolecule(mol, useRandomCoords=True, maxAttempts=100, randomSeed=42)
-
-                    if result == -1:
-                        # 第二次失败，尝试使用ETKDGv3方法
-                        logger.warning(f"Second attempt failed, trying with ETKDGv3 for {job.smiles}")
-                        params = AllChem.ETKDGv3()
-                        params.randomSeed = 42
-                        result = AllChem.EmbedMolecule(mol, params)
-
-                    if result == -1:
-                        raise ValueError(f"无法生成3D坐标")
-
-                    # 尝试优化几何结构
-                    try:
-                        AllChem.MMFFOptimizeMolecule(mol)
-                    except Exception as opt_error:
-                        logger.warning(f"MMFF optimization failed: {opt_error}, using unoptimized coordinates")
-
-                    conf = mol.GetConformer()
-                    for i, atom in enumerate(mol.GetAtoms()):
-                        pos = conf.GetAtomPosition(i)
-                        symbol = atom.GetSymbol()
-                        gjf_content += f" {symbol:<2}  {pos.x:>12.6f}  {pos.y:>12.6f}  {pos.z:>12.6f}\n"
-            except Exception as e:
-                logger.error(f"Failed to generate 3D coordinates: {e}")
-                raise ValueError(f"无法为 {job.molecule_name} (SMILES: {job.smiles}) 生成3D坐标。\n"
-                               f"建议：1) 检查SMILES是否正确；2) 为特殊分子上传PDB文件；3) 联系管理员添加预定义坐标。\n"
-                               f"错误详情: {str(e)}")
+            # 使用新的渐进式坐标生成
+            if not job.config.get("xyz_content"):
+                try:
+                    from app.utils.coordinate_generator import generate_3d_coordinates
+                    
+                    logger.info(f"Generating 3D coordinates for {job.smiles}")
+                    
+                    coord_result = generate_3d_coordinates(
+                        smiles=job.smiles,
+                        molecule_name=job.molecule_name,
+                        charge=job.charge,
+                        multiplicity=job.spin_multiplicity,
+                        enable_xtb=True
+                    )
+                    
+                    xyz_content = coord_result.xyz_content
+                    
+                    # 记录坐标生成信息
+                    if not job.config:
+                        job.config = {}
+                    job.config['coordinate_source'] = coord_result.source
+                    job.config['coordinate_quality'] = coord_result.quality
+                    job.config['min_atom_distance'] = coord_result.min_distance
+                    
+                    # 警告用户如果使用了随机坐标
+                    if coord_result.source == 'random':
+                        warning_msg = "⚠ Warning: Using random coordinates - structure may be unreliable"
+                        logger.warning(f"{warning_msg} for job {job.id}")
+                        if 'warnings' not in job.config:
+                            job.config['warnings'] = []
+                        job.config['warnings'].extend(coord_result.warnings)
+                    else:
+                        logger.info(f"✓ Coordinates generated via {coord_result.source} (quality: {coord_result.quality})")
+                    
+                except Exception as coord_error:
+                    logger.error(f"Coordinate generation failed: {coord_error}")
+                    job.status = QCJobStatus.FAILED
+                    job.error_message = f"无法生成3D坐标: {str(coord_error)}"
+                    db.commit()
+                    return
+            
+            # 将生成的XYZ内容添加到gjf_content
+            if xyz_content:
+                lines = xyz_content.strip().split('\n')
+                for line in lines[2:]:  # 跳过原子数和注释行
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        atom_symbol = parts[0]
+                        x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+                        gjf_content += f" {atom_symbol:<2}  {x:>12.6f}  {y:>12.6f}  {z:>12.6f}\n"
+            else:
+                # 如果 xyz_content 仍然为空，说明生成失败
+                error_msg = f"无法为 {job.molecule_name} (SMILES: {job.smiles}) 生成3D坐标。\n" \
+                            f"建议：1) 检查SMILES是否正确；2) 为特殊分子上传PDB文件；3) 联系管理员添加预定义坐标。"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
     gjf_content += "\n"
 
@@ -569,17 +583,26 @@ def submit_qc_job_task(self, job_id: int) -> Dict[str, Any]:
 
         logger.info(f"[Task {self.request.id}] QC Job: {job.molecule_name}, SMILES: {job.smiles[:30]}...")
 
-        # 2. 创建工作目录
-        qc_base_path = getattr(settings, 'QC_WORK_BASE_PATH', '/public/home/xiaoji/molyte_web/data/qc_jobs')
-        work_dir = Path(qc_base_path) / f"qc_job_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        work_dir.mkdir(parents=True, exist_ok=True)
 
+        # 使用新的层次化目录结构
+        job_id_str = f"QC-{job_id}"
+        
+        # 创建完整的任务目录结构 (input/work/output/logs)
+        dirs = paths.create_job_structure('qc', job_id_str, 'active')
+        
+        work_dir = dirs['work']  # 主要工作目录(用于Gaussian运行)
+        input_dir = dirs['input']  # 输入文件
+        output_dir = dirs['output']  # 输出结果
+        logs_dir = dirs['logs']  # 日志文件
+        
+        logger.info(f"[Task {self.request.id}] Created job structure for {job_id_str}")
         logger.info(f"[Task {self.request.id}] Work directory: {work_dir}")
 
         # 3. 生成Gaussian输入文件
         try:
-            gjf_path, safe_name = generate_gaussian_input(job, work_dir)
+            gjf_path, safe_name = generate_gaussian_input(job, input_dir)  # 输入文件放在input目录
             logger.info(f"[Task {self.request.id}] Generated Gaussian input: {gjf_path} (safe_name={safe_name})")
+
         except Exception as e:
             error_msg = f"Failed to generate Gaussian input: {str(e)}"
             logger.error(f"[Task {self.request.id}] {error_msg}")
@@ -620,7 +643,7 @@ def submit_qc_job_task(self, job_id: int) -> Dict[str, Any]:
         # 6. 更新数据库
         job.status = QCJobStatus.QUEUED
         job.slurm_job_id = str(slurm_job_id)
-        job.work_dir = str(work_dir)
+        job.work_dir = str(dirs['root'])  # 保存根目录，子目录可通过paths API获取
         job.started_at = datetime.now()
         job.config = job.config or {}
         job.config["submitted_at"] = datetime.now().isoformat()

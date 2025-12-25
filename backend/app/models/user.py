@@ -63,26 +63,44 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
-    # 核时配额系统（统一的唯一真实来源）
-    balance_cpu_hours = Column(Float, default=100.0, nullable=False)  # 可用余额（核时）
-                                                                        # 正数 = 可用核时
-                                                                        # 负数 = 欠费核时
-                                                                        # 0 = 无可用核时
-    frozen_cpu_hours = Column(Float, default=0.0, nullable=False)    # 冻结核时（运行中任务占用）
+    # ============================================================================
+    # 核心配额系统 (经济控制 - Single Source of Truth)
+    # ============================================================================
+    balance_cpu_hours = Column(Float, default=100.0, nullable=False,
+        comment="可用核时余额：正数=可用，负数=欠费，0=无余额（唯一真实来源）")
+    frozen_cpu_hours = Column(Float, default=0.0, nullable=False,
+        comment="冻结核时：运行中任务占用的核时")
 
     # 核时来源追踪（用于统计和分析，不影响实际可用核时）
-    free_cpu_hours_granted = Column(Float, default=100.0, nullable=False)  # 初始赠送的免费核时
-    recharge_cpu_hours = Column(Float, default=0.0, nullable=False)  # 充值获得的核时
-    admin_granted_cpu_hours = Column(Float, default=0.0, nullable=False)  # 管理员赠送的核时
+    free_cpu_hours_granted = Column(Float, default=100.0, nullable=False,
+        comment="统计：初始赠送的免费核时")
+    recharge_cpu_hours = Column(Float, default=0.0, nullable=False,
+        comment="统计：充值获得的核时")
+    admin_granted_cpu_hours = Column(Float, default=0.0, nullable=False,
+        comment="统计：管理员赠送的核时")
 
-    # 其他配额限制（保留兼容，但不再用于核时计算）
-    daily_job_limit = Column(Integer, default=10, nullable=False)   # 每日任务限制
-    concurrent_job_limit = Column(Integer, default=3, nullable=False)  # 并发任务限制
-    storage_quota_gb = Column(Float, default=10.0, nullable=False)  # 存储配额（GB）
+    # ============================================================================
+    # 资源保护系统 (集群保护 - Resource Protection)
+    # ============================================================================
+    # 防止资源滥用和集群过载，与余额配额互补
+    concurrent_job_limit = Column(Integer, default=5, nullable=False,
+        comment="并发任务硬限制：同时运行的任务数上限，0=不限制（仅ADMIN）")
+    daily_job_limit = Column(Integer, default=20, nullable=False,
+        comment="每日任务硬限制：每日提交任务数上限，0=不限制（仅ADMIN）")
+    storage_quota_gb = Column(Float, default=50.0, nullable=False,
+        comment="存储配额软限制：超出90%时警告但不阻止，0=不限制")
+    
+    # 资源保护开关
+    enable_resource_limits = Column(Boolean, default=True, nullable=False,
+        comment="是否启用资源保护限制（管理员可关闭，普通用户启用）")
 
     # Queue/Partition permissions (JSON array of allowed partition names)
     allowed_partitions = Column(JSON, nullable=True)
     allowed_modules = Column(JSON, nullable=True)  # 允许访问的模块列表
+    
+    # QC Engine permissions
+    can_use_gaussian = Column(Boolean, default=False, nullable=False)  # 是否允许使用Gaussian(需license)
+    
     custom_cpu_hour_price = Column(Float, nullable=True)  # 自定义核时单价
     price_updated_at = Column(DateTime(timezone=True), nullable=True)  # 定价最后更新时间
     price_updated_by = Column(Integer, nullable=True)  # 更新定价的管理员 ID

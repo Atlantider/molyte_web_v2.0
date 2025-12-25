@@ -78,13 +78,23 @@ class ElectrolyteCreateNew(BaseModel):
     # Box configuration
     box: BoxConfig
 
-    # Simulation parameters
+    # Simulation parameters (温度将移至MD任务，此处保留向后兼容)
     temperature: Optional[float] = Field(default=298.15, gt=0)
     pressure: Optional[float] = Field(default=1.0, gt=0)
     nsteps_npt: Optional[int] = Field(default=5000000, gt=0)
     nsteps_nvt: Optional[int] = Field(default=10000000, gt=0)
     timestep: Optional[float] = Field(default=1.0, gt=0)
     force_field: Optional[str] = Field(default="OPLS")
+    
+    # 电解液分类标签
+    labels: Optional[Dict[str, Any]] = Field(default=None)
+    # 示例: {
+    #     "battery_type": "lithium_metal",
+    #     "anode_types": ["li_metal"],
+    #     "cathode_types": ["ncm", "high_nickel"],
+    #     "conditions": ["high_temp", "high_voltage"],
+    #     "electrolyte_type": "organic_liquid"
+    # }
 
 
 class ElectrolyteUpdate(BaseModel):
@@ -107,6 +117,7 @@ class ElectrolyteInDB(ElectrolyteBase):
     project_id: int
     hash_key: str
     user_note: Optional[str] = None  # User's custom name/note (not part of system name)
+    labels: Optional[Dict[str, Any]] = None  # 电解液分类标签
     created_at: datetime
 
     class Config:

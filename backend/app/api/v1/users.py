@@ -1,9 +1,9 @@
 """
 User management API endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timedelta
 from app.database import get_db
 from app.models.user import User, UserRole
@@ -13,6 +13,12 @@ from app.dependencies import get_current_active_user, get_current_admin_user
 from app.core.security import get_password_hash
 from app.core.logger import logger
 from app.services.quota_service import QuotaService
+# Import error handling
+from app.core.errors import (
+    not_found_error,
+    forbidden_error,
+    invalid_input_error
+)
 
 router = APIRouter()
 
@@ -40,12 +46,13 @@ def list_users(
     return users
 
 
+
 @router.get("/{user_id}", response_model=UserSchema)
 def get_user(
     user_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
-):
+) -> User:
     """
     Get user by ID
     
@@ -58,21 +65,16 @@ def get_user(
         User: User data
         
     Raises:
-        HTTPException: If user not found or no permission
+        APIError 403: If no permission to view user
+        APIError 404: If user not found
     """
     # Users can only view their own profile unless they are admin
     if current_user.id != user_id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
-        )
+        raise forbidden_error("您无权查看其他用户的信息")
     
-    user = db.query(User).filter(User.id == user_id).first()
+    user: Optional[User] = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
+        raise not_found_error("用户", user_id)
     
     return user
 
@@ -83,7 +85,7 @@ def update_user(
     user_update: UserUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
-):
+) -> User:
     """
     Update user
     
@@ -97,21 +99,16 @@ def update_user(
         User: Updated user
         
     Raises:
-        HTTPException: If user not found or no permission
+        APIError 403: If no permission to update user
+        APIError 404: If user not found
     """
     # Users can only update their own profile unless they are admin
     if current_user.id != user_id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
-        )
+        raise forbidden_error("您无权修改其他用户的信息")
     
-    user = db.query(User).filter(User.id == user_id).first()
+    user: Optional[User] = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
+        raise not_found_error("用户", user_id)
     
     # Update fields
     update_data = user_update.model_dump(exclude_unset=True)
@@ -332,6 +329,59 @@ def get_account_info(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get account info"
         )
+
+
+@router.get("/me", response_model=schemas.UserProfile)
+def get_current_user_profile(
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get current user's profile"""
+    return current_user
+
+
+@router.get("/me/quota-status")
+def get_quota_status(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取用户配额状态(用于前端显示和权限判断)
+    
+    Returns:
+        配额状态信息,包括余额、冻结、可用、欠费等
+    """
+    from app.services.quota_service import QuotaService
+    
+    # 获取可用配额
+    available_quota = QuotaService.get_available_quota(current_user, db)
+    
+    # 判断是否欠费
+    has_debt = current_user.balance_cpu_hours < 0
+    debt_amount = abs(current_user.balance_cpu_hours) if has_debt else 0
+    
+    # 计算实际余额(正数部分)
+    balance = max(0, current_user.balance_cpu_hours)
+    
+    # 低余额阈值
+    warning_threshold = 10.0
+    is_low_balance = available_quota < warning_threshold
+    
+    # 是否可以提交任务和查看结果
+    can_submit_jobs = available_quota >= 1.0 and not has_debt
+    can_view_results = not has_debt
+    
+    return {
+        'balance': balance,
+        'frozen': current_user.frozen_cpu_hours,
+        'available': available_quota,
+        'has_debt': has_debt,
+        'debt_amount': debt_amount,
+        'can_submit_jobs': can_submit_jobs,
+        'can_view_results': can_view_results,
+        'warning_threshold': warning_threshold,
+        'is_low_balance': is_low_balance,
+        'account_type': current_user.account_type
+    }
 
 
 @router.get("/me/quota")

@@ -277,10 +277,19 @@ class PollingWorker:
                 slurm_job_id = job_info['slurm_job_id']
                 work_dir = job_info['work_dir']
 
-                # 检查 Slurm 任务状态，同时传入工作目录用于容错恢复
-                status = self._check_slurm_status(slurm_job_id, work_dir)
-
-                if status == 'COMPLETED':
+                # 定期更新CPU hours (每次检查都更新运行中任务的核时)
+                if 'type' in job_info:
+                    try:
+                        current_cpu_hours = self._get_realtime_cpu_hours(slurm_job_id)
+                        if current_cpu_hours > 0:
+                            self._update_job_cpu_hours_api(job_id, job_info['type'], current_cpu_hours)
+                    except Exception as e:
+                        self.logger.debug(f"Failed to update CPU hours for job {job_id}: {e}")
+                
+                # 检查 Slurm 任务状态
+                status_info = self._check_slurm_status(slurm_job_id, work_dir)
+                
+                if status_info['status'] == 'COMPLETED':
                     self.logger.info(f"任务 {job_id} (Slurm: {slurm_job_id}) 已完成，开始处理结果...")
                     # 临时添加到 running_jobs 以便 _handle_job_completion 可以处理
                     temp_job_info = {
@@ -3182,74 +3191,11 @@ echo "QC calculation completed"
             if result.returncode == 0:
                 self.logger.info(f"成功取消 Slurm 任务 {slurm_job_id}")
             else:
-                self.logger.warning(f"取消 Slurm 任务失败: {result.stderr}")
+            self.logger.warning(f"取消 Slurm 任务失败: {result.stderr}")
 
         except Exception as e:
             self.logger.error(f"取消 Slurm 任务 {slurm_job_id} 失败: {e}")
 
-    def _check_slurm_status(self, slurm_job_id: str, work_dir: str = None) -> str:
-        """
-        检查 Slurm 任务状态
-
-        优先使用 Slurm 的历史记录（sacct），只在必要时才检查工作目录
-        """
-        try:
-            # 1. 先检查任务是否在当前队列中
-            cmd = f"squeue -j {slurm_job_id} -h -o %T"
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=10
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                status = result.stdout.strip()
-                # Slurm 状态: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED 等
-                if status == 'PENDING':
-                    return 'QUEUED'  # Slurm 排队中
-                elif status == 'RUNNING':
-                    return 'RUNNING'  # Slurm 正在运行
-                elif status == 'COMPLETING':
-                    return 'RUNNING'  # 正在完成，视为运行中
-                elif status == 'COMPLETED':
-                    return 'COMPLETED'
-                elif status == 'CANCELLED':
-                    return 'CANCELLED'
-                else:
-                    return 'FAILED'
-
-            # 2. 任务不在队列中，查询 Slurm 历史记录
-            # 使用更详细的 sacct 查询，获取完整的状态信息
-            cmd = f"sacct -j {slurm_job_id} --format=State --noheader --parsable2"
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=10
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                # sacct 可能返回多行（主任务 + 子任务），取第一行
-                status_line = result.stdout.strip().split('\n')[0]
-                status = status_line.strip()
-
-                self.logger.info(f"Slurm 历史记录查询: job_id={slurm_job_id}, status={status}")
-
-                if 'COMPLETED' in status:
-                    return 'COMPLETED'
-                elif 'CANCELLED' in status:
-                    return 'CANCELLED'
-                elif 'FAILED' in status or 'TIMEOUT' in status or 'OUT_OF_MEMORY' in status:
-                    return 'FAILED'
-                elif 'RUNNING' in status or 'PENDING' in status:
-                    return status.replace('PENDING', 'QUEUED')
-                else:
-                    # 其他状态视为失败
-                    self.logger.warning(f"未知的 Slurm 状态: {status}")
-                    return 'FAILED'
-
-            # 3. 如果 sacct 也找不到任务，检查工作目录中是否有完成标志
-            # 这是最后的容错机制
-            if work_dir:
-                self.logger.info(f"Slurm 历史记录中找不到任务 {slurm_job_id}，检查工作目录")
-                return self._check_work_dir_completion_status(work_dir)
-
-            return 'UNKNOWN'
 
         except Exception as e:
             self.logger.error(f"检查 Slurm 状态失败: {e}")
@@ -3601,61 +3547,131 @@ echo "QC calculation completed"
     def _get_job_cpu_hours(self, slurm_job_id: str) -> float:
         """
         获取 Slurm 任务的 CPU 核时数
-
-        优先使用 sacct 获取 CPUTimeRAW，如果失败则尝试使用 sstat 或 squeue
-        最后才使用时间差估算（会包括排队时间，但总比没有好）
-
-        Args:
-            slurm_job_id: Slurm 任务 ID
-
+    def _parse_slurm_time(self, time_str: str) -> int:
+        """
+        解析Slurm时间格式为秒数
+        
+        支持格式:
+        - MM:SS
+        - HH:MM:SS  
+        - DD-HH:MM:SS
+        
         Returns:
-            CPU 核时数
+            秒数
         """
         try:
-            # 方法 1: 使用 sacct 获取 CPUTimeRAW（最准确）
+            days = 0
+            if '-' in time_str:
+                day_part, time_part = time_str.split('-')
+                days = int(day_part)
+                time_str = time_part
+            
+            parts = time_str.split(':')
+            if len(parts) == 3:
+                hours, minutes, seconds = map(int, parts)
+            elif len(parts) == 2:
+                hours = 0
+                minutes, seconds = map(int, parts)
+            else:
+                return 0
+            
+            total_seconds = days * 86400 + hours * 3600 + minutes * 60 + seconds
+            return total_seconds
+        except Exception as e:
+            self.logger.debug(f"Failed to parse Slurm time '{time_str}': {e}")
+            return 0
+    
+    def _get_realtime_cpu_hours(self, slurm_job_id: str) -> float:
+        """
+        获取实时CPU hours (支持运行中的任务)
+        
+        三层策略:
+        1. sstat - 运行中任务的实时数据(最准确)
+        2. sacct - 已完成任务的历史数据
+        3. 估算 - 基于运行时间和CPU数(作为后备)
+        
+        Returns:
+            CPU核时数（小时）
+        """
+        # 方法1: 使用sstat获取运行中任务的实时CPU时间
+        try:
+            result = subprocess.run(
+                ['sstat', '-j', slurm_job_id, '-o', 'CPUTime', '-n', '--parsable'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                # CPUTime格式: DD-HH:MM:SS 或 HH:MM:SS
+                cpu_time_str = result.stdout.strip().split('|')[0]
+                cpu_seconds = self._parse_slurm_time(cpu_time_str)
+                if cpu_seconds > 0:
+                    cpu_hours = cpu_seconds / 3600.0
+                    self.logger.debug(f"Job {slurm_job_id} sstat CPU hours: {cpu_hours:.2f}h")
+                    return cpu_hours
+        except Exception as e:
+            self.logger.debug(f"sstat failed for {slurm_job_id}: {e}")
+        
+        # 方法2: 使用sacct (适用于已完成任务)
+        try:
             result = subprocess.run(
                 ['sacct', '-j', slurm_job_id, '-o', 'CPUTimeRAW', '-n', '-X'],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=5
             )
-
+            
             if result.returncode == 0 and result.stdout.strip():
-                try:
-                    cpu_time_seconds = int(result.stdout.strip().split()[0])
-                    if cpu_time_seconds > 0:
-                        cpu_hours = cpu_time_seconds / 3600.0
-                        self.logger.info(f"Job {slurm_job_id}: CPUTimeRAW={cpu_time_seconds}s, CPU hours={cpu_hours:.2f}h (from sacct)")
-                        return cpu_hours
-                except (ValueError, IndexError) as e:
-                    self.logger.warning(f"Failed to parse CPUTimeRAW for job {slurm_job_id}: {e}, output={result.stdout}")
-            else:
-                self.logger.warning(f"sacct command failed for job {slurm_job_id}: returncode={result.returncode}, stderr={result.stderr}")
-
-            # 方法 2: 如果 sacct 失败或返回 0，尝试使用 sstat
-            try:
-                result = subprocess.run(
-                    ['sstat', '-j', slurm_job_id, '-o', 'CPUTimeRAW', '-n', '-X'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    cpu_time_seconds = int(result.stdout.strip().split()[0])
-                    if cpu_time_seconds > 0:
-                        cpu_hours = cpu_time_seconds / 3600.0
-                        self.logger.info(f"Job {slurm_job_id}: CPUTimeRAW={cpu_time_seconds}s, CPU hours={cpu_hours:.2f}h (from sstat)")
-                        return cpu_hours
-            except Exception as e:
-                self.logger.debug(f"sstat command failed for job {slurm_job_id}: {e}")
-
-            # 方法 3: 如果以上都失败，返回 0.0
-            self.logger.warning(f"Could not retrieve CPU hours for job {slurm_job_id} using sacct or sstat")
-            return 0.0
-
+                cpu_time_seconds = int(result.stdout.strip().split()[0])
+                if cpu_time_seconds > 0:
+                    cpu_hours = cpu_time_seconds / 3600.0
+                    self.logger.debug(f"Job {slurm_job_id} sacct CPU hours: {cpu_hours:.2f}h")
+                    return cpu_hours
         except Exception as e:
-            self.logger.error(f"Failed to get CPU hours for job {slurm_job_id}: {e}")
-            return 0.0
+            self.logger.debug(f"sacct failed for {slurm_job_id}: {e}")
+        
+        # 方法3: 估算 (基于运行时间和CPU数)
+        try:
+            result = subprocess.run(
+                ['squeue', '-j', slurm_job_id, '-h', '-o', '%M %C'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split()
+                if len(parts) >= 2:
+                    elapsed_time = parts[0]  # 格式: DD-HH:MM:SS
+                    num_cpus = int(parts[1])
+                    
+                    elapsed_seconds = self._parse_slurm_time(elapsed_time)
+                    estimated_cpu_hours = (elapsed_seconds * num_cpus) / 3600.0
+                    
+                    self.logger.debug(f"Job {slurm_job_id} estimated CPU hours: {estimated_cpu_hours:.2f}h")
+                    return estimated_cpu_hours
+        except Exception as e:
+            self.logger.debug(f"Estimation failed for {slurm_job_id}: {e}")
+        
+        return 0.0
+    
+    def _get_job_cpu_hours(self, slurm_job_id: str) -> float:
+        """
+        从 Slurm 获取任务的 CPU 核时数
+        
+        优先使用实时方法获取准确数据
+        
+        Returns:
+            CPU核时数（小时）
+        """
+        cpu_hours = self._get_realtime_cpu_hours(slurm_job_id)
+        
+        if cpu_hours > 0:
+            return cpu_hours
+        
+        self.logger.warning(f"Failed to get CPU hours for job {slurm_job_id}, returning 0.0")
+        return 0.0
 
     def _parse_gaussian_output(self, work_dir: Path) -> Optional[Dict[str, Any]]:
         """解析 Gaussian 输出文件，提取能量、HOMO、LUMO 等"""
@@ -8171,6 +8187,40 @@ q
         except Exception as e:
             self.logger.error(f"刷新前端缓存异常: {e}")
             return False
+
+    def _update_job_cpu_hours_api(self, job_id: int, job_type: str, cpu_hours: float):
+        """
+        通过API更新任务的CPU hours到数据库(实时追踪)
+        
+        Args:
+            job_id: 任务ID
+            job_type: 任务类型 ('qc', 'md', 'postprocess' 等)
+            cpu_hours: CPU核时数(小时)
+        """
+        try:
+            # 根据任务类型构建API路径
+            type_mapping = {
+                'qc': 'qc',
+                'md': 'md', 
+                'postprocess': 'postprocess',
+                'anion': 'anion-generation'
+            }
+            
+            api_type = type_mapping.get(job_type, job_type)
+            
+            response = requests.patch(
+                f"{self.api_base_url}/{api_type}/jobs/{job_id}",
+                headers=self.api_headers,
+                json={'actual_cpu_hours': cpu_hours},
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                self.logger.debug(f"Updated {job_type} job {job_id} CPU hours: {cpu_hours:.2f}h")
+            else:
+                self.logger.debug(f"Failed to update CPU hours for {job_type} job {job_id}: {response.status_code}")
+        except Exception as e:
+            self.logger.debug(f"Error updating CPU hours for {job_type} job {job_id}: {e}")
 
 
 def main():

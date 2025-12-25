@@ -32,7 +32,9 @@ router = APIRouter()
 # Path to initial salts directory - 动态检测环境
 # 优先使用云端路径，找不到则使用校园网路径
 _CLOUD_SALTS_DIR = Path("/opt/molyte_web_v1.0/data/initial_salts")
-_CAMPUS_SALTS_DIR = Path("/public/home/xiaoji/molyte_web/data/initial_salts")
+# 使用统一路径配置
+from app.core.paths import paths
+_CAMPUS_SALTS_DIR = paths.initial_salts_dir
 SALTS_DIR = _CLOUD_SALTS_DIR if _CLOUD_SALTS_DIR.exists() else _CAMPUS_SALTS_DIR
 
 # Cache for ion information (loaded on startup)
@@ -65,6 +67,57 @@ def get_ions_info():
     return _ions_cache
 
 
+@router.get("/label-options")
+def get_label_options(current_user: User = Depends(get_current_active_user)):
+    """
+    获取电解液标签选项列表
+    
+    用于前端显示标签选择UI
+    
+    Returns:
+        Dict with all label categories and their options
+    """
+    from app.models.electrolyte_labels import (
+        BatteryType, AnodeType, CathodeType, OperatingCondition, ElectrolyteFormType,
+        BATTERY_TYPE_NAMES, ANODE_TYPE_NAMES, CATHODE_TYPE_NAMES, 
+        CONDITION_NAMES, ELECTROLYTE_TYPE_NAMES
+    )
+    
+    def enum_to_options(enum_class, names_map):
+        return [
+            {"value": e.value, "label": names_map.get(e, e.value)}
+            for e in enum_class
+        ]
+    
+    return {
+        "battery_type": {
+            "label": "电池类型",
+            "type": "single",
+            "options": enum_to_options(BatteryType, BATTERY_TYPE_NAMES)
+        },
+        "anode_types": {
+            "label": "负极材料",
+            "type": "multiple",
+            "options": enum_to_options(AnodeType, ANODE_TYPE_NAMES)
+        },
+        "cathode_types": {
+            "label": "正极材料",
+            "type": "multiple",
+            "options": enum_to_options(CathodeType, CATHODE_TYPE_NAMES)
+        },
+        "conditions": {
+            "label": "工作条件",
+            "type": "multiple",
+            "options": enum_to_options(OperatingCondition, CONDITION_NAMES)
+        },
+        "electrolyte_type": {
+            "label": "电解液类型",
+            "type": "single",
+            "options": enum_to_options(ElectrolyteFormType, ELECTROLYTE_TYPE_NAMES)
+        }
+    }
+
+
 @router.get("/available-ions")
 def get_available_ions_endpoint(
     db: Session = Depends(get_db),
@@ -84,12 +137,33 @@ def get_available_ions_endpoint(
     # Get ions from file system (existing method)
     file_ions_info = get_ions_info()
     file_cations, file_anions = get_cations_and_anions(file_ions_info)
+    
+    # 获取文件系统中存在的阴离子名称（用于同步检查）
+    file_anion_names = {a["name"] for a in file_anions}
 
     # Get anions from database (AnionLibrary)
     from app.models.forcefield import AnionLibrary
     db_anions_query = db.query(AnionLibrary).filter(
         AnionLibrary.is_deleted == False
     ).all()
+
+    # 同步检查：标记已删除的阴离子（文件不存在但数据库中有记录）
+    orphaned_count = 0
+    for anion in db_anions_query:
+        # 检查 .lt 文件是否存在
+        lt_file = SALTS_DIR / f"{anion.anion_name}.lt"
+        if not lt_file.exists() and anion.anion_name not in file_anion_names:
+            logger.info(f"Marking orphaned anion as deleted: {anion.anion_name} (file not found)")
+            anion.is_deleted = True
+            orphaned_count += 1
+    
+    if orphaned_count > 0:
+        db.commit()
+        logger.info(f"Cleaned up {orphaned_count} orphaned anion(s) from database")
+        # 重新查询
+        db_anions_query = db.query(AnionLibrary).filter(
+            AnionLibrary.is_deleted == False
+        ).all()
 
     db_anions = []
     for anion in db_anions_query:
@@ -316,14 +390,15 @@ def create_electrolyte_new_format(
     db_electrolyte = ElectrolyteSystem(
         **create_data.dict(),
         hash_key=hash_key,
-        user_note=user_note  # Store user's custom name separately
+        user_note=user_note,  # Store user's custom name separately
+        labels=electrolyte_data.labels or {}  # Store classification labels
     )
 
     db.add(db_electrolyte)
     db.commit()
     db.refresh(db_electrolyte)
 
-    logger.info(f"Created electrolyte system (new format) {db_electrolyte.id} by {current_user.username}")
+    logger.info(f"Created electrolyte system (new format) {db_electrolyte.id} by {current_user.username}, labels={electrolyte_data.labels}")
 
     return db_electrolyte
 

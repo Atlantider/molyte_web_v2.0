@@ -930,14 +930,95 @@ def postprocess_qc_job(self, job_id: int) -> Dict[str, Any]:
                 logger.info(f"Found output file by glob: {log_file}")
 
         if not log_file or not log_file.exists():
-            job.status = QCJobStatus.FAILED
-            job.error_message = "Gaussian output file not found"
-            db.commit()
-            return {"success": False, "error": "Output file not found"}
+            # 检查是否可以重试
+            from app.tasks.qc_retry_helpers import can_retry_postprocess, find_output_files, extract_partial_results, auto_resubmit_failed_job
+            
+            # 尝试从工作目录自动查找输出文件
+            engine = job.qc_engine or 'gaussian'
+            found_files = find_output_files(work_dir, engine)
+            
+            if found_files.get('log_file'):
+                log_file = found_files['log_file']
+                fchk_file = found_files.get('fchk_file')
+                logger.info(f"Auto-recovered output files for job {job_id}: {log_file}")
+            else:
+                # 尝试提取部分结果
+                partial_results = extract_partial_results(work_dir, engine)
+                if partial_results:
+                    logger.warning(f"Extracted partial results for job {job_id}, marking as COMPLETED with warning")
+                    gaussian_results = partial_results
+                    # 继续后续处理,但不生成可视化
+                    fchk_file = None
+                elif can_retry_postprocess(job):
+                    # 自动重新提交
+                    if auto_resubmit_failed_job(job, db):
+                        return {"success": False, "error": "Output file not found, job resubmitted", "resubmitted": True}
+                    else:
+                        job.status = QCJobStatus.FAILED
+                        job.error_message = f"Output file not found after {job.retry_count} retries"
+                        db.commit()
+                        return {"success": False, "error": "Output file not found, resubmit failed"}
+                else:
+                    job.status = QCJobStatus.FAILED
+                    job.error_message = f"Output file not found, max retries ({job.max_retries}) exceeded"
+                    db.commit()
+                    return {"success": False, "error": f"Output file not found after max retries"}  
 
-        # 2. 提取Gaussian结果
-        gaussian_results = extract_gaussian_results(str(log_file))
-        logger.info(f"Extracted Gaussian results: {gaussian_results}")
+        # 2. 提取结果(根据引擎类型)
+        engine = job.qc_engine or 'gaussian'
+        
+        if engine == 'gaussian':
+            gaussian_results = extract_gaussian_results(str(log_file))
+            logger.info(f"Extracted Gaussian results: {gaussian_results}")
+            
+            # 检查结果是否有效
+            if not gaussian_results.get('energy_au'):
+                from app.tasks.qc_retry_helpers import can_retry_postprocess, auto_resubmit_failed_job, extract_partial_results
+                
+                # 尝试提取部分结果
+                partial_results = extract_partial_results(work_dir, engine)
+                if partial_results and partial_results.get('energy_au'):
+                    logger.warning(f"Using partial results for job {job_id}")
+                    gaussian_results = partial_results
+                elif can_retry_postprocess(job):
+                    if auto_resubmit_failed_job(job, db):
+                        return {"success": False, "error": "Failed to extract results, job resubmitted", "resubmitted": True}
+                
+                if not gaussian_results.get('energy_au'):
+                    job.status = QCJobStatus.FAILED
+                    job.error_message = "Failed to extract energy from output"
+                    job.retry_count += 1
+                    db.commit()
+                    return {"success": False, "error": "Failed to extract results"}
+        
+        elif engine == 'pyscf':
+            from app.services.qc_engines.pyscf import PySCFEngine
+            pyscf_engine = PySCFEngine()
+            result = pyscf_engine.parse_output(work_dir / "pyscf_out.log")
+            
+            if not result.success:
+                from app.tasks.qc_retry_helpers import can_retry_postprocess, auto_resubmit_failed_job
+                if can_retry_postprocess(job):
+                    if auto_resubmit_failed_job(job, db):
+                        return {"success": False, "error": result.error_message, "resubmitted": True}
+                
+                job.status = QCJobStatus.FAILED
+                job.error_message = result.error_message
+                job.retry_count += 1
+                db.commit()
+                return {"success": False, "error": result.error_message}
+            
+            # 转换PySCF结果为Gaussian格式
+            gaussian_results = {
+                'energy_au': result.energy_au,
+                'homo': result.homo / 27.2114 if result.homo else None,  # eV to Hartree
+                'lumo': result.lumo / 27.2114 if result.lumo else None,
+            }
+        else:
+            job.status = QCJobStatus.FAILED
+            job.error_message = f"Unknown QC engine: {engine}"
+            db.commit()
+            return {"success": False, "error": f"Unknown engine: {engine}"}
 
         # 3. 生成可视化图像（如果fchk存在）
         esp_image_path = None

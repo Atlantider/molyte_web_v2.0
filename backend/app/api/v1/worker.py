@@ -783,7 +783,78 @@ async def update_job_status(
                 detail=f"QC Job {job_id} not found"
             )
 
-        # 更新状态
+        # ✅ 新增：QC 失败时的自动重试协调
+        if mapped_status == "FAILED":
+            # 获取重试次数
+            retry_count = job.config.get('retry_count', 0) if job.config else 0
+            max_retries = 2  # 最多重试 2 次
+            error_msg = status_update.error_message or ""
+            
+            # 判断是否应该重试（SCF收敛问题等瞬态错误）
+            is_retryable = any(keyword in error_msg.lower() for keyword in [
+                'scf', 'convergence', 'converge', 'not converged', 
+                'optimization', 'exceeded'
+            ])
+            
+            if is_retryable and retry_count < max_retries:
+                logger.info(
+                    f"QC Job {job_id} failed with retryable error, "
+                    f"scheduling retry #{retry_count + 1}"
+                )
+                
+                # 重置状态为 SUBMITTED，让 Worker 重新获取
+                job.status = QCJobStatus.SUBMITTED
+                
+                # 更新重试配置
+                if not job.config:
+                    job.config = {}
+                job.config['retry_count'] = retry_count + 1
+                job.config['previous_errors'] = job.config.get('previous_errors', []) + [error_msg]
+                
+                # 根据错误类型调整参数
+                if 'scf' in error_msg.lower() or 'convergence' in error_msg.lower():
+                    # SCF 收敛问题：调整收敛参数
+                    job.config['scf_max_cycles'] = 300
+                    if retry_count == 0:
+                        job.config['scf_convergence'] = 'loose'
+                    else:
+                        job.config['scf_algorithm'] = 'damping'
+                        job.config['damping_factor'] = 0.5
+                
+                # 清除完成时间
+                job.finished_at = None
+                job.error_message = None
+                
+                db.commit()
+                
+                logger.info(
+                    f"QC Job {job_id} reset to SUBMITTED for retry #{retry_count + 1}"
+                )
+                
+                return {
+                    "status": "retry_scheduled",
+                    "job_id": job_id,
+                    "retry_count": retry_count + 1,
+                    "message": f"QC job failed, auto-retry #{retry_count + 1} scheduled",
+                    "adjusted_parameters": {
+                        k: v for k, v in job.config.items() 
+                        if k in ['scf_max_cycles', 'scf_convergence', 'scf_algorithm']
+                    }
+                }
+            else:
+                # 超过重试次数或不可重试的错误
+                if retry_count >= max_retries:
+                    logger.warning(
+                        f"QC Job {job_id} failed after {max_retries} retries"
+                    )
+                    job.error_message = (
+                        f"Failed after {max_retries} retries. "
+                        f"Last error: {error_msg}"
+                    )
+                else:
+                    job.error_message = error_msg
+
+        # 更新状态（非重试情况）
         job.status = QCJobStatus[mapped_status]
 
         if status_update.slurm_job_id:
@@ -793,7 +864,8 @@ async def update_job_status(
             job.work_dir = status_update.work_dir
 
         # 处理 error_message：如果在请求中明确提供了该字段（包括 None），则更新
-        if status_update.error_message is not None:
+        if status_update.error_message is not None and mapped_status != "FAILED":
+            # 非失败状态才直接更新 error_message（失败状态在上面处理）
             job.error_message = status_update.error_message
 
         if status_update.progress is not None:

@@ -41,6 +41,8 @@ import {
   AppstoreOutlined,
   DatabaseOutlined,
   ThunderboltOutlined,
+  HistoryOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import AdminNav from '../../components/AdminNav';
@@ -79,6 +81,23 @@ const UserManagement: React.FC = () => {
     role_prices: { ADMIN: 0.1, PREMIUM: 0.08, USER: 0.1, GUEST: 0.15 },
   });
 
+  // 标签页状态
+  const [activeTab, setActiveTab] = useState('users');
+
+  // 充值记录状态
+  const [rechargeRecords, setRechargeRecords] = useState<any[]>([]);
+
+  // 消费记录状态
+  const [consumptionRecords, setConsumptionRecords] = useState<any[]>([]);
+  const [detailedConsumption, setDetailedConsumption] = useState<any[]>([]);
+  const [consumptionStats, setConsumptionStats] = useState({
+    total: 0,
+    totalMoney: 0,
+    count: 0,
+    average: 0,
+    averageMoney: 0,
+  });
+
   // 批量操作状态
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [batchModalVisible, setBatchModalVisible] = useState(false);
@@ -100,6 +119,7 @@ const UserManagement: React.FC = () => {
     loadUsers();
     loadPartitions();
     loadPricingConfig();
+    loadBillingRecords();
   }, []);
 
   // 应用筛选
@@ -125,6 +145,38 @@ const UserManagement: React.FC = () => {
       setPricingConfig(response.data);
     } catch (error: any) {
       console.warn('加载定价配置失败:', error);
+    }
+  };
+
+  // 加载计费记录
+  const loadBillingRecords = async () => {
+    try {
+      // 加载充值记录
+      const rechargeRes = await apiClient.get('/billing/admin/recharge-records');
+      setRechargeRecords(rechargeRes.data || []);
+
+      // 加载消费记录
+      const consumptionRes = await apiClient.get('/billing/admin/consumption-records');
+      setConsumptionRecords(consumptionRes.data || []);
+
+      // 加载详细消费记录
+      const detailedRes = await apiClient.get('/billing/admin/consumption-details');
+      setDetailedConsumption(detailedRes.data || []);
+
+      // 计算消费统计
+      const data = detailedRes.data || [];
+      const totalConsumption = data.reduce((sum: number, item: any) => sum + (item.cpu_hours || 0), 0);
+      const totalMoney = data.reduce((sum: number, item: any) => sum + (item.money_amount || item.amount || 0), 0);
+      const consumptionCount = data.length;
+      setConsumptionStats({
+        total: totalConsumption,
+        totalMoney: totalMoney,
+        count: consumptionCount,
+        average: consumptionCount > 0 ? totalConsumption / consumptionCount : 0,
+        averageMoney: consumptionCount > 0 ? totalMoney / consumptionCount : 0,
+      });
+    } catch (error: any) {
+      console.warn('加载计费记录失败:', error);
     }
   };
 
@@ -660,31 +712,7 @@ const UserManagement: React.FC = () => {
       </Row>
 
       <Card
-        title={
-          <Space size={10}>
-            <UserOutlined style={{ color: token.colorPrimary }} />
-            <span>用户列表</span>
-            {selectedRowKeys.length > 0 && (
-              <Tag color="blue" style={{ fontSize: 13 }}>{selectedRowKeys.length} 已选中</Tag>
-            )}
-          </Space>
-        }
         bordered={false}
-        extra={
-          <Space size={10}>
-            <Button
-              icon={<SettingOutlined />}
-              onClick={handleBatchOperation}
-              disabled={selectedRowKeys.length === 0}
-              title={selectedRowKeys.length === 0 ? '请先选择用户' : `已选择 ${selectedRowKeys.length} 个用户`}
-            >
-              批量设置 ({selectedRowKeys.length})
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-              创建用户
-            </Button>
-          </Space>
-        }
         style={{
           borderRadius: 12,
           boxShadow: isDark ? '0 2px 12px rgba(0,0,0,0.3)' : '0 2px 12px rgba(0,0,0,0.08)',
@@ -692,172 +720,373 @@ const UserManagement: React.FC = () => {
         }}
         styles={{ body: { padding: '16px 20px' } }}
       >
-        {/* 筛选栏 */}
-        <div style={{
-          marginBottom: 16,
-          padding: '16px',
-          background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa',
-          borderRadius: 10,
-          border: `1px solid ${token.colorBorder}`,
-        }}>
-          {/* 第一行：搜索框 + 操作按钮 */}
-          <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'center' }}>
-            <Input
-              placeholder="搜索用户名、邮箱、组织..."
-              prefix={<SearchOutlined style={{ color: token.colorTextSecondary }} />}
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              allowClear
-              style={{ flex: 1, maxWidth: 300 }}
-            />
-            <Button icon={<FilterOutlined />} onClick={handleResetFilters}>重置筛选</Button>
-            <Button icon={<ReloadOutlined />} onClick={loadUsers}>刷新</Button>
-            <Text type="secondary" style={{ marginLeft: 'auto', fontSize: 13 }}>
-              显示 {filteredUsers.length} / {users.length} 用户
-            </Text>
-          </div>
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: 'users',
+              label: <span><UserOutlined /> 用户列表</span>,
+              children: (
+                <>
+                  {/* 用户列表工具栏 */}
+                  <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Space size={10}>
+                      {selectedRowKeys.length > 0 && (
+                        <Tag color="blue" style={{ fontSize: 13 }}>{selectedRowKeys.length} 已选中</Tag>
+                      )}
+                    </Space>
+                    <Space size={10}>
+                      <Button
+                        icon={<SettingOutlined />}
+                        onClick={handleBatchOperation}
+                        disabled={selectedRowKeys.length === 0}
+                        title={selectedRowKeys.length === 0 ? '请先选择用户' : `已选择 ${selectedRowKeys.length} 个用户`}
+                      >
+                        批量设置 ({selectedRowKeys.length})
+                      </Button>
+                      <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+                        创建用户
+                      </Button>
+                    </Space>
+                  </div>
 
-          {/* 第二行：筛选标签 */}
-          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* 角色筛选 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Text type="secondary" style={{ fontSize: 13 }}>角色:</Text>
-              <Space size={6}>
-                {[
-                  { value: 'ADMIN', label: '管理员', color: '#85a5ff' },
-                  { value: 'PREMIUM', label: '高级', color: '#95de64' },
-                  { value: 'USER', label: '普通', color: '#b37feb' },
-                  { value: 'GUEST', label: '访客', color: '#ffc069' },
-                ].map((role) => {
-                  const isSelected = roleFilter === role.value;
-                  return (
-                    <div
-                      key={role.value}
-                      onClick={() => setRoleFilter(isSelected ? undefined : role.value)}
-                      style={{
-                        cursor: 'pointer',
-                        fontSize: 13,
-                        padding: '4px 12px',
-                        borderRadius: '4px',
-                        border: `1px solid ${role.color}`,
-                        color: isSelected ? 'white' : role.color,
-                        background: isSelected ? role.color : 'transparent',
-                        transition: 'all 0.2s',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {role.label} ({users.filter(u => u.role === role.value).length})
+                  {/* 筛选栏 */}
+                  <div style={{
+                    marginBottom: 16,
+                    padding: '16px',
+                    background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa',
+                    borderRadius: 10,
+                    border: `1px solid ${token.colorBorder}`,
+                  }}>
+                    {/* 第一行：搜索框 + 操作按钮 */}
+                    <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'center' }}>
+                      <Input
+                        placeholder="搜索用户名、邮箱、组织..."
+                        prefix={<SearchOutlined style={{ color: token.colorTextSecondary }} />}
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                        allowClear
+                        style={{ flex: 1, maxWidth: 300 }}
+                      />
+                      <Button icon={<FilterOutlined />} onClick={handleResetFilters}>重置筛选</Button>
+                      <Button icon={<ReloadOutlined />} onClick={loadUsers}>刷新</Button>
+                      <Text type="secondary" style={{ marginLeft: 'auto', fontSize: 13 }}>
+                        显示 {filteredUsers.length} / {users.length} 用户
+                      </Text>
                     </div>
-                  );
-                })}
-              </Space>
-            </div>
 
-            {/* 类型筛选 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Text type="secondary" style={{ fontSize: 13 }}>类型:</Text>
-              <Space size={6}>
-                {[
-                  { value: 'STUDENT', label: '学生', color: '#722ed1' },
-                  { value: 'RESEARCHER', label: '研究者', color: '#13c2c2' },
-                  { value: 'COMPANY', label: '企业', color: '#eb2f96' },
-                ].map((type) => {
-                  const isSelected = userTypeFilter === type.value;
-                  return (
-                    <div
-                      key={type.value}
-                      onClick={() => setUserTypeFilter(isSelected ? undefined : type.value)}
-                      style={{
-                        cursor: 'pointer',
-                        fontSize: 13,
-                        padding: '4px 12px',
-                        borderRadius: '4px',
-                        border: `1px solid ${type.color}`,
-                        color: isSelected ? 'white' : type.color,
-                        background: isSelected ? type.color : 'transparent',
-                        transition: 'all 0.2s',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {type.label}
+                    {/* 第二行：筛选标签 */}
+                    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {/* 角色筛选 */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Text type="secondary" style={{ fontSize: 13 }}>角色:</Text>
+                        <Space size={6}>
+                          {[
+                            { value: 'ADMIN', label: '管理员', color: '#85a5ff' },
+                            { value: 'PREMIUM', label: '高级', color: '#95de64' },
+                            { value: 'USER', label: '普通', color: '#b37feb' },
+                            { value: 'GUEST', label: '访客', color: '#ffc069' },
+                          ].map((role) => {
+                            const isSelected = roleFilter === role.value;
+                            return (
+                              <div
+                                key={role.value}
+                                onClick={() => setRoleFilter(isSelected ? undefined : role.value)}
+                                style={{
+                                  cursor: 'pointer',
+                                  fontSize: 13,
+                                  padding: '4px 12px',
+                                  borderRadius: '4px',
+                                  border: `1px solid ${role.color}`,
+                                  color: isSelected ? 'white' : role.color,
+                                  background: isSelected ? role.color : 'transparent',
+                                  transition: 'all 0.2s',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {role.label} ({users.filter(u => u.role === role.value).length})
+                              </div>
+                            );
+                          })}
+                        </Space>
+                      </div>
+
+                      {/* 类型筛选 */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Text type="secondary" style={{ fontSize: 13 }}>类型:</Text>
+                        <Space size={6}>
+                          {[
+                            { value: 'STUDENT', label: '学生', color: '#722ed1' },
+                            { value: 'RESEARCHER', label: '研究者', color: '#13c2c2' },
+                            { value: 'COMPANY', label: '企业', color: '#eb2f96' },
+                          ].map((type) => {
+                            const isSelected = userTypeFilter === type.value;
+                            return (
+                              <div
+                                key={type.value}
+                                onClick={() => setUserTypeFilter(isSelected ? undefined : type.value)}
+                                style={{
+                                  cursor: 'pointer',
+                                  fontSize: 13,
+                                  padding: '4px 12px',
+                                  borderRadius: '4px',
+                                  border: `1px solid ${type.color}`,
+                                  color: isSelected ? 'white' : type.color,
+                                  background: isSelected ? type.color : 'transparent',
+                                  transition: 'all 0.2s',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {type.label}
+                              </div>
+                            );
+                          })}
+                        </Space>
+                      </div>
+
+                      {/* 状态筛选 */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Text type="secondary" style={{ fontSize: 13 }}>状态:</Text>
+                        <Space size={6}>
+                          <div
+                            onClick={() => setStatusFilter(statusFilter === true ? undefined : true)}
+                            style={{
+                              cursor: 'pointer',
+                              fontSize: 13,
+                              padding: '4px 12px',
+                              borderRadius: '4px',
+                              border: `1px solid #52c41a`,
+                              color: statusFilter === true ? 'white' : '#52c41a',
+                              background: statusFilter === true ? '#52c41a' : 'transparent',
+                              transition: 'all 0.2s',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            激活 ({users.filter(u => u.is_active).length})
+                          </div>
+                          <div
+                            onClick={() => setStatusFilter(statusFilter === false ? undefined : false)}
+                            style={{
+                              cursor: 'pointer',
+                              fontSize: 13,
+                              padding: '4px 12px',
+                              borderRadius: '4px',
+                              border: `1px solid #f5222d`,
+                              color: statusFilter === false ? 'white' : '#f5222d',
+                              background: statusFilter === false ? '#f5222d' : 'transparent',
+                              transition: 'all 0.2s',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            禁用 ({users.filter(u => !u.is_active).length})
+                          </div>
+                        </Space>
+                      </div>
                     </div>
-                  );
-                })}
-              </Space>
-            </div>
+                  </div>
 
-            {/* 状态筛选 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Text type="secondary" style={{ fontSize: 13 }}>状态:</Text>
-              <Space size={6}>
-                <div
-                  onClick={() => setStatusFilter(statusFilter === true ? undefined : true)}
-                  style={{
-                    cursor: 'pointer',
-                    fontSize: 13,
-                    padding: '4px 12px',
-                    borderRadius: '4px',
-                    border: `1px solid #52c41a`,
-                    color: statusFilter === true ? 'white' : '#52c41a',
-                    background: statusFilter === true ? '#52c41a' : 'transparent',
-                    transition: 'all 0.2s',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  激活 ({users.filter(u => u.is_active).length})
-                </div>
-                <div
-                  onClick={() => setStatusFilter(statusFilter === false ? undefined : false)}
-                  style={{
-                    cursor: 'pointer',
-                    fontSize: 13,
-                    padding: '4px 12px',
-                    borderRadius: '4px',
-                    border: `1px solid #f5222d`,
-                    color: statusFilter === false ? 'white' : '#f5222d',
-                    background: statusFilter === false ? '#f5222d' : 'transparent',
-                    transition: 'all 0.2s',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  禁用 ({users.filter(u => !u.is_active).length})
-                </div>
-              </Space>
-            </div>
-          </div>
-        </div>
-        <Table
-          dataSource={filteredUsers}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1200 }}
-          rowSelection={{
-            selectedRowKeys,
-            onChange: (keys) => {
-              // 只保留在 filteredUsers 中存在的 key
-              const validKeys = keys.filter(key =>
-                filteredUsers.some(user => user.id === key)
-              );
-              setSelectedRowKeys(validKeys as number[]);
+                  <Table
+                    dataSource={filteredUsers}
+                    columns={columns}
+                    rowKey="id"
+                    loading={loading}
+                    scroll={{ x: 1200 }}
+                    rowSelection={{
+                      selectedRowKeys,
+                      onChange: (keys) => {
+                        const validKeys = keys.filter(key =>
+                          filteredUsers.some(user => user.id === key)
+                        );
+                        setSelectedRowKeys(validKeys as number[]);
+                      },
+                      selections: [
+                        Table.SELECTION_ALL,
+                        Table.SELECTION_INVERT,
+                        Table.SELECTION_NONE,
+                      ],
+                    }}
+                    pagination={{
+                      pageSize: 20,
+                      showSizeChanger: true,
+                      showTotal: (total) => `共 ${total} 个用户`,
+                      pageSizeOptions: ['10', '20', '50', '100'],
+                      style: { marginTop: 16 },
+                    }}
+                    style={{ borderRadius: 10 }}
+                    className="user-management-table"
+                  />
+                </>
+              ),
             },
-            selections: [
-              Table.SELECTION_ALL,
-              Table.SELECTION_INVERT,
-              Table.SELECTION_NONE,
-            ],
-          }}
-          pagination={{
-            pageSize: 20,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 个用户`,
-            pageSizeOptions: ['10', '20', '50', '100'],
-            style: { marginTop: 16 },
-          }}
-          style={{
-            borderRadius: 10,
-          }}
-          className="user-management-table"
+            {
+              key: 'recharge',
+              label: <span><HistoryOutlined /> 充值记录</span>,
+              children: (
+                <Table
+                  columns={[
+                    {
+                      title: '用户ID',
+                      dataIndex: 'user_id',
+                      key: 'user_id',
+                      width: 80,
+                      sorter: (a: any, b: any) => a.user_id - b.user_id,
+                    },
+                    {
+                      title: '用户名',
+                      key: 'username',
+                      width: 120,
+                      render: (_: any, record: any) => {
+                        const user = users.find(u => u.id === record.user_id);
+                        return user?.username || '-';
+                      }
+                    },
+                    {
+                      title: '充值金额',
+                      dataIndex: 'amount',
+                      key: 'amount',
+                      width: 100,
+                      render: (val: number) => `¥${(val || 0).toFixed(2)}`,
+                      sorter: (a: any, b: any) => (a.amount || 0) - (b.amount || 0),
+                    },
+                    {
+                      title: '获得核时',
+                      dataIndex: 'cpu_hours',
+                      key: 'cpu_hours',
+                      width: 100,
+                      render: (val: number) => `${(val || 0).toFixed(2)}h`,
+                      sorter: (a: any, b: any) => (a.cpu_hours || 0) - (b.cpu_hours || 0),
+                    },
+                    {
+                      title: '充值时间',
+                      dataIndex: 'created_at',
+                      key: 'created_at',
+                      width: 180,
+                      render: (val: string) => val ? new Date(val).toLocaleString('zh-CN') : '-',
+                      sorter: (a: any, b: any) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
+                    },
+                  ]}
+                  dataSource={rechargeRecords}
+                  rowKey="id"
+                  pagination={{ pageSize: 20 }}
+                  scroll={{ x: 800 }}
+                  loading={loading}
+                />
+              ),
+            },
+            {
+              key: 'consumption',
+              label: <span><BarChartOutlined /> 消费记录</span>,
+              children: (
+                <Tabs
+                  items={[
+                    {
+                      key: 'summary',
+                      label: '消费汇总',
+                      children: (
+                        <Table
+                          columns={[
+                            {
+                              title: '用户ID',
+                              dataIndex: 'user_id',
+                              key: 'user_id',
+                              width: 80,
+                              sorter: (a: any, b: any) => a.user_id - b.user_id,
+                            },
+                            {
+                              title: '用户名',
+                              key: 'username',
+                              width: 120,
+                              render: (_: any, record: any) => {
+                                const user = users.find(u => u.id === record.user_id);
+                                return user?.username || '-';
+                              }
+                            },
+                            {
+                              title: '总消费金额',
+                              dataIndex: 'total_consumption',
+                              key: 'total_consumption',
+                              width: 120,
+                              render: (val: number) => `¥${(val || 0).toFixed(2)}`,
+                              sorter: (a: any, b: any) => (a.total_consumption || 0) - (b.total_consumption || 0),
+                            },
+                            {
+                              title: '消耗核时',
+                              dataIndex: 'total_cpu_hours',
+                              key: 'total_cpu_hours',
+                              width: 100,
+                              render: (val: number) => `${(val || 0).toFixed(2)}h`,
+                              sorter: (a: any, b: any) => (a.total_cpu_hours || 0) - (b.total_cpu_hours || 0),
+                            },
+                            {
+                              title: '最后消费时间',
+                              dataIndex: 'last_consumption_at',
+                              key: 'last_consumption_at',
+                              width: 180,
+                              render: (val: string) => val ? new Date(val).toLocaleString('zh-CN') : '-',
+                            },
+                          ]}
+                          dataSource={consumptionRecords}
+                          rowKey="user_id"
+                          pagination={{ pageSize: 20 }}
+                          scroll={{ x: 800 }}
+                          loading={loading}
+                        />
+                      ),
+                    },
+                    {
+                      key: 'details',
+                      label: '消费详情',
+                      children: (
+                        <Table
+                          columns={[
+                            {
+                              title: '用户ID',
+                              dataIndex: 'user_id',
+                              key: 'user_id',
+                              width: 80,
+                            },
+                            {
+                              title: '用户名',
+                              dataIndex: 'username',
+                              key: 'username',
+                              width: 120,
+                            },
+                            {
+                              title: '消费核时',
+                              dataIndex: 'cpu_hours',
+                              key: 'cpu_hours',
+                              width: 100,
+                              render: (val: number) => `${(val || 0).toFixed(2)}h`,
+                            },
+                            {
+                              title: '消费金额',
+                              dataIndex: 'amount',
+                              key: 'amount',
+                              width: 100,
+                              render: (val: number) => `¥${(val || 0).toFixed(2)}`,
+                            },
+                            {
+                              title: '消费时间',
+                              dataIndex: 'created_at',
+                              key: 'created_at',
+                              width: 180,
+                              render: (val: string) => val ? new Date(val).toLocaleString('zh-CN') : '-',
+                            },
+                          ]}
+                          dataSource={detailedConsumption}
+                          rowKey="id"
+                          pagination={{ pageSize: 20 }}
+                          scroll={{ x: 800 }}
+                          loading={loading}
+                        />
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+          ]}
         />
       </Card>
 

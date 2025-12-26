@@ -1,0 +1,368 @@
+/* AI Discovery 现代化样式 - 科技感设计 */
+
+/* 主题变量 */
+:root {
+  --ai-primary: #1890ff;
+  --ai-secondary: #722ed1;
+  --ai-success: #52c41a;
+  --ai-warning: #fa8c16;
+  --ai-error: #ff4d4f;
+  --ai-gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --ai-gradient-card: linear-gradient(145deg, #ffffff 0%, #f8f9fa 100%);
+  --ai-shadow-light: 0 8px 32px rgba(0, 0, 0, 0.1);
+  --ai-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.15);
+  --ai-border-radius: 16px;
+  --ai-transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[data-theme='dark'] {
+  --ai-gradient-card: linear-gradient(145deg, #262626 0%, #1a1a1a 100%);
+  --ai-shadow-light: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --ai-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* 容器样式 */
+.ai-discovery-container {
+  padding: 24px;
+  min-height: 100vh;
+  background: var(--ai-gradient-primary);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* 科技感背景动画 */
+.ai-discovery-container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.3) 0%, transparent 50%);
+  animation: backgroundShift 20s ease-in-out infinite;
+  z-index: -1;
+  pointer-events: none;
+}
+
+@keyframes backgroundShift {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.1); }
+}
+
+/* 玻璃态卡片效果 */
+.ai-discovery-card {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: var(--ai-border-radius);
+  box-shadow:
+    var(--ai-shadow-light),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  transition: var(--ai-transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-discovery-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  transition: left 0.5s ease;
+}
+
+.ai-discovery-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    var(--ai-shadow-hover),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.ai-discovery-card:hover::before {
+  left: 100%;
+}
+
+[data-theme='dark'] .ai-discovery-card {
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    var(--ai-shadow-light),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .ai-discovery-card::before {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+}
+
+[data-theme='dark'] .ai-discovery-card:hover {
+  box-shadow:
+    var(--ai-shadow-hover),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+/* 分子卡片现代化样式 */
+.molecule-card {
+  transition: var(--ai-transition);
+  border-radius: var(--ai-border-radius);
+  overflow: hidden;
+  position: relative;
+  background: var(--ai-gradient-card);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.molecule-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--ai-primary), var(--ai-secondary), #eb2f96);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.molecule-card:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow:
+    0 20px 40px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(24, 144, 255, 0.2);
+}
+
+.molecule-card:hover::before {
+  opacity: 1;
+}
+
+[data-theme='dark'] .molecule-card {
+  background: var(--ai-gradient-card);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .molecule-card:hover {
+  box-shadow:
+    0 20px 40px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(24, 144, 255, 0.3);
+}
+
+/* 属性卡片样式 */
+.property-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  transition: var(--ai-transition);
+  cursor: pointer;
+}
+
+.property-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(24, 144, 255, 0.05) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.property-card.selected::before {
+  opacity: 1;
+}
+
+.property-card.selected {
+  border-color: var(--ai-primary) !important;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+  transform: scale(1.02);
+}
+
+.property-card:hover {
+  transform: translateY(-2px);
+}
+
+/* 聚类可视化容器 */
+.cluster-visualization {
+  position: relative;
+  width: 100%;
+  height: 600px;
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.1) 0%, transparent 70%),
+    linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: var(--ai-border-radius);
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+[data-theme='dark'] .cluster-visualization {
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.05) 0%, transparent 70%),
+    linear-gradient(135deg, #1a1a1a 0%, #0d1117 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 分子节点样式 */
+.molecule-node {
+  cursor: pointer;
+  transition: var(--ai-transition);
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.1));
+}
+
+.molecule-node:hover {
+  transform: scale(1.2);
+  filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.2));
+}
+
+.molecule-node.center {
+  filter: drop-shadow(0 4px 16px rgba(24, 144, 255, 0.4));
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+/* 属性标签现代化 */
+.property-tag {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  margin: 2px;
+  display: inline-block;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  transition: var(--ai-transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.property-tag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.5s ease;
+}
+
+.property-tag:hover {
+  transform: translateY(-1px);
+}
+
+.property-tag:hover::before {
+  left: 100%;
+}
+
+.property-tag.measured {
+  background: linear-gradient(135deg, var(--ai-success) 0%, #73d13d 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(82, 196, 26, 0.3);
+}
+
+.property-tag.predicted {
+  background: linear-gradient(135deg, var(--ai-primary) 0%, #40a9ff 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.3);
+}
+
+/* 加载动画 */
+.loading-shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+  border-radius: 8px;
+}
+
+[data-theme='dark'] .loading-shimmer {
+  background: linear-gradient(90deg, #262626 25%, #1a1a1a 50%, #262626 75%);
+  background-size: 200% 100%;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* 步骤指示器 */
+.step-indicator {
+  position: relative;
+}
+
+.step-indicator::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ai-primary), var(--ai-secondary));
+  border-radius: 1px;
+  transform: scaleX(0);
+  transition: transform 0.3s ease;
+}
+
+.step-indicator.active::after {
+  transform: scaleX(1);
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+  .ai-discovery-container {
+    padding: 16px;
+  }
+
+  .molecule-card:hover {
+    transform: translateY(-4px) scale(1.01);
+  }
+
+  .cluster-visualization {
+    height: 400px;
+  }
+
+  .ant-segmented {
+    width: 100%;
+  }
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--ai-primary), var(--ai-secondary));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #40a9ff, #9254de);
+}
+
+[data-theme='dark'] ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* 特殊效果 */
+.glow-effect {
+  box-shadow: 0 0 20px rgba(24, 144, 255, 0.3);
+  animation: glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes glow {
+  from { box-shadow: 0 0 20px rgba(24, 144, 255, 0.3); }
+  to { box-shadow: 0 0 30px rgba(24, 144, 255, 0.5); }
+}
+

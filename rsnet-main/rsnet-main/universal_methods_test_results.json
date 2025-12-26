@@ -1,0 +1,776 @@
+{
+  "test_summary": {
+    "total_tests": 6,
+    "successful_tests": 6,
+    "failed_tests": 0,
+    "success_rate": 100.0,
+    "hardcode_free_rate": 100.0
+  },
+  "universality_validation": {
+    "arbitrary_molecules_supported": true,
+    "no_hardcoded_dependencies": true,
+    "chemical_diversity": 6,
+    "total_molecules_discovered": 23,
+    "total_reactions_discovered": 5
+  },
+  "detailed_results": {
+    "Simple Organic Molecules": {
+      "success": true,
+      "execution_time": 0.06651139259338379,
+      "network": {
+        "total_molecules": 4,
+        "total_reactions": 1,
+        "generations": 2,
+        "execution_time": 0.06651139259338379,
+        "generation_stats": [
+          {
+            "generation": 0,
+            "input_molecules": 3,
+            "generated_reactions": 7,
+            "feasible_reactions": 1,
+            "new_molecules": 1,
+            "total_molecules": 4,
+            "total_reactions": 1,
+            "time": 0.027646780014038086
+          },
+          {
+            "generation": 1,
+            "input_molecules": 4,
+            "generated_reactions": 8,
+            "feasible_reactions": 0,
+            "new_molecules": 0,
+            "total_molecules": 4,
+            "total_reactions": 1,
+            "time": 0.03644990921020508
+          }
+        ],
+        "molecules_by_generation": {
+          "0": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO",
+              "energy": -793.6,
+              "generation": 0
+            },
+            {
+              "name": "ethylene",
+              "smiles": "C=C",
+              "energy": -542.6,
+              "generation": 0
+            },
+            {
+              "name": "CO2",
+              "smiles": "O=C=O",
+              "energy": -477.8,
+              "generation": 0
+            }
+          ],
+          "1": [
+            {
+              "name": "ethylene_saturated",
+              "smiles": "CC",
+              "energy": -638.6,
+              "generation": 1
+            }
+          ]
+        },
+        "reaction_types": {
+          "reduction": 1
+        },
+        "energy_statistics": {
+          "min_energy": -793.6,
+          "max_energy": -477.8,
+          "mean_energy": -613.15,
+          "std_energy": 118.85582652945543
+        },
+        "reaction_energy_statistics": {
+          "min_reaction_energy": -96.0,
+          "max_reaction_energy": -96.0,
+          "mean_reaction_energy": -96.0,
+          "exothermic_reactions": 1,
+          "endothermic_reactions": 0
+        },
+        "molecules": [
+          {
+            "name": "ethanol",
+            "smiles": "CCO",
+            "energy": -793.6,
+            "generation": 0,
+            "formula": "C2H6O"
+          },
+          {
+            "name": "ethylene",
+            "smiles": "C=C",
+            "energy": -542.6,
+            "generation": 0,
+            "formula": "C2H4"
+          },
+          {
+            "name": "CO2",
+            "smiles": "O=C=O",
+            "energy": -477.8,
+            "generation": 0,
+            "formula": "CO2"
+          },
+          {
+            "name": "ethylene_saturated",
+            "smiles": "CC",
+            "energy": -638.6,
+            "generation": 1,
+            "formula": "C2H6"
+          }
+        ],
+        "reactions": [
+          {
+            "name": "reduction_ethylene",
+            "reactants": [
+              {
+                "name": "ethylene",
+                "smiles": "C=C",
+                "energy": -542.6
+              }
+            ],
+            "products": [
+              {
+                "name": "ethylene_saturated",
+                "smiles": "CC",
+                "energy": -638.6
+              }
+            ],
+            "activation_energy": 15.999999999999996,
+            "energy_change": -96.0,
+            "is_exothermic": true
+          }
+        ]
+      },
+      "message": "Universal network generation completed successfully"
+    },
+    "Cyclic Compounds (No EC/PC)": {
+      "success": true,
+      "execution_time": 0.12693047523498535,
+      "network": {
+        "total_molecules": 6,
+        "total_reactions": 3,
+        "generations": 2,
+        "execution_time": 0.12693047523498535,
+        "generation_stats": [
+          {
+            "generation": 0,
+            "input_molecules": 3,
+            "generated_reactions": 3,
+            "feasible_reactions": 3,
+            "new_molecules": 3,
+            "total_molecules": 6,
+            "total_reactions": 3,
+            "time": 0.03542637825012207
+          },
+          {
+            "generation": 1,
+            "input_molecules": 6,
+            "generated_reactions": 3,
+            "feasible_reactions": 0,
+            "new_molecules": 0,
+            "total_molecules": 6,
+            "total_reactions": 3,
+            "time": 0.08600926399230957
+          }
+        ],
+        "molecules_by_generation": {
+          "0": [
+            {
+              "name": "cyclopentane",
+              "smiles": "C1CCCC1",
+              "energy": -1387.8,
+              "generation": 0
+            },
+            {
+              "name": "cyclobutane",
+              "smiles": "C1CCC1",
+              "energy": -1088.9,
+              "generation": 0
+            },
+            {
+              "name": "cyclopropane",
+              "smiles": "C1CC1",
+              "energy": -808.9,
+              "generation": 0
+            }
+          ],
+          "1": [
+            {
+              "name": "cyclopentane_opened",
+              "smiles": "CCCCC",
+              "energy": -1475.0,
+              "generation": 1
+            },
+            {
+              "name": "cyclobutane_butyl",
+              "smiles": "CCCC",
+              "energy": -1196.2,
+              "generation": 1
+            },
+            {
+              "name": "cyclopropane_propyl",
+              "smiles": "CCC",
+              "energy": -917.4,
+              "generation": 1
+            }
+          ]
+        },
+        "reaction_types": {
+          "ring": 3
+        },
+        "energy_statistics": {
+          "min_energy": -1475.0,
+          "max_energy": -808.9,
+          "mean_energy": -1145.7,
+          "std_energy": 237.48070798838938
+        },
+        "reaction_energy_statistics": {
+          "min_reaction_energy": -108.5,
+          "max_reaction_energy": -87.20000000000005,
+          "mean_reaction_energy": -101.0,
+          "exothermic_reactions": 3,
+          "endothermic_reactions": 0
+        },
+        "molecules": [
+          {
+            "name": "cyclopentane",
+            "smiles": "C1CCCC1",
+            "energy": -1387.8,
+            "generation": 0,
+            "formula": "C5H10"
+          },
+          {
+            "name": "cyclobutane",
+            "smiles": "C1CCC1",
+            "energy": -1088.9,
+            "generation": 0,
+            "formula": "C4H8"
+          },
+          {
+            "name": "cyclopropane",
+            "smiles": "C1CC1",
+            "energy": -808.9,
+            "generation": 0,
+            "formula": "C3H6"
+          },
+          {
+            "name": "cyclopentane_opened",
+            "smiles": "CCCCC",
+            "energy": -1475.0,
+            "generation": 1,
+            "formula": "C5H12"
+          },
+          {
+            "name": "cyclobutane_butyl",
+            "smiles": "CCCC",
+            "energy": -1196.2,
+            "generation": 1,
+            "formula": "C4H10"
+          },
+          {
+            "name": "cyclopropane_propyl",
+            "smiles": "CCC",
+            "energy": -917.4,
+            "generation": 1,
+            "formula": "C3H8"
+          }
+        ],
+        "reactions": [
+          {
+            "name": "ring_opening_cyclopentane",
+            "reactants": [
+              {
+                "name": "cyclopentane",
+                "smiles": "C1CCCC1",
+                "energy": -1387.8
+              }
+            ],
+            "products": [
+              {
+                "name": "cyclopentane_opened",
+                "smiles": "CCCCC",
+                "energy": -1475.0
+              }
+            ],
+            "activation_energy": 45.0,
+            "energy_change": -87.20000000000005,
+            "is_exothermic": true
+          },
+          {
+            "name": "ring_opening_cyclobutane",
+            "reactants": [
+              {
+                "name": "cyclobutane",
+                "smiles": "C1CCC1",
+                "energy": -1088.9
+              }
+            ],
+            "products": [
+              {
+                "name": "cyclobutane_butyl",
+                "smiles": "CCCC",
+                "energy": -1196.2
+              }
+            ],
+            "activation_energy": 40.0,
+            "energy_change": -107.29999999999995,
+            "is_exothermic": true
+          },
+          {
+            "name": "ring_opening_cyclopropane",
+            "reactants": [
+              {
+                "name": "cyclopropane",
+                "smiles": "C1CC1",
+                "energy": -808.9
+              }
+            ],
+            "products": [
+              {
+                "name": "cyclopropane_propyl",
+                "smiles": "CCC",
+                "energy": -917.4
+              }
+            ],
+            "activation_energy": 35.0,
+            "energy_change": -108.5,
+            "is_exothermic": true
+          }
+        ]
+      },
+      "message": "Universal network generation completed successfully"
+    },
+    "Heteroatom Compounds": {
+      "success": true,
+      "execution_time": 0.022896766662597656,
+      "network": {
+        "total_molecules": 3,
+        "total_reactions": 0,
+        "generations": 1,
+        "execution_time": 0.022896766662597656,
+        "generation_stats": [
+          {
+            "generation": 0,
+            "input_molecules": 3,
+            "generated_reactions": 0,
+            "feasible_reactions": 0,
+            "new_molecules": 0,
+            "total_molecules": 3,
+            "total_reactions": 0,
+            "time": 0.021413326263427734
+          }
+        ],
+        "molecules_by_generation": {
+          "0": [
+            {
+              "name": "ethylamine",
+              "smiles": "CCN",
+              "energy": -853.5,
+              "generation": 0
+            },
+            {
+              "name": "ethanethiol",
+              "smiles": "CCS",
+              "energy": -1116.7,
+              "generation": 0
+            },
+            {
+              "name": "fluoroethane",
+              "smiles": "CCF",
+              "energy": -737.8,
+              "generation": 0
+            }
+          ]
+        },
+        "reaction_types": {},
+        "energy_statistics": {
+          "min_energy": -1116.7,
+          "max_energy": -737.8,
+          "mean_energy": -902.6666666666666,
+          "std_energy": 158.54404925936376
+        },
+        "reaction_energy_statistics": {},
+        "molecules": [
+          {
+            "name": "ethylamine",
+            "smiles": "CCN",
+            "energy": -853.5,
+            "generation": 0,
+            "formula": "C2H7N"
+          },
+          {
+            "name": "ethanethiol",
+            "smiles": "CCS",
+            "energy": -1116.7,
+            "generation": 0,
+            "formula": "C2H6S"
+          },
+          {
+            "name": "fluoroethane",
+            "smiles": "CCF",
+            "energy": -737.8,
+            "generation": 0,
+            "formula": "C2H5F"
+          }
+        ],
+        "reactions": []
+      },
+      "message": "Universal network generation completed successfully"
+    },
+    "Aromatic System": {
+      "success": true,
+      "execution_time": 0.08549380302429199,
+      "network": {
+        "total_molecules": 4,
+        "total_reactions": 1,
+        "generations": 2,
+        "execution_time": 0.08549380302429199,
+        "generation_stats": [
+          {
+            "generation": 0,
+            "input_molecules": 3,
+            "generated_reactions": 3,
+            "feasible_reactions": 1,
+            "new_molecules": 1,
+            "total_molecules": 4,
+            "total_reactions": 1,
+            "time": 0.03460359573364258
+          },
+          {
+            "generation": 1,
+            "input_molecules": 4,
+            "generated_reactions": 3,
+            "feasible_reactions": 0,
+            "new_molecules": 0,
+            "total_molecules": 4,
+            "total_reactions": 1,
+            "time": 0.046582937240600586
+          }
+        ],
+        "molecules_by_generation": {
+          "0": [
+            {
+              "name": "benzene",
+              "smiles": "c1ccccc1",
+              "energy": -1429.8,
+              "generation": 0
+            },
+            {
+              "name": "pyridine",
+              "smiles": "c1ccncc1",
+              "energy": -1365.9,
+              "generation": 0
+            },
+            {
+              "name": "furan",
+              "smiles": "c1ccoc1",
+              "energy": -1142.0,
+              "generation": 0
+            }
+          ],
+          "1": [
+            {
+              "name": "benzene_hexatriene",
+              "smiles": "C=CC=CC=C",
+              "energy": -1465.8,
+              "generation": 1
+            }
+          ]
+        },
+        "reaction_types": {
+          "ring": 1
+        },
+        "energy_statistics": {
+          "min_energy": -1465.8,
+          "max_energy": -1142.0,
+          "mean_energy": -1350.875,
+          "std_energy": 125.78893780853703
+        },
+        "reaction_energy_statistics": {
+          "min_reaction_energy": -36.0,
+          "max_reaction_energy": -36.0,
+          "mean_reaction_energy": -36.0,
+          "exothermic_reactions": 1,
+          "endothermic_reactions": 0
+        },
+        "molecules": [
+          {
+            "name": "benzene",
+            "smiles": "c1ccccc1",
+            "energy": -1429.8,
+            "generation": 0,
+            "formula": "C6H6"
+          },
+          {
+            "name": "pyridine",
+            "smiles": "c1ccncc1",
+            "energy": -1365.9,
+            "generation": 0,
+            "formula": "C5H5N"
+          },
+          {
+            "name": "furan",
+            "smiles": "c1ccoc1",
+            "energy": -1142.0,
+            "generation": 0,
+            "formula": "C4H4O"
+          },
+          {
+            "name": "benzene_hexatriene",
+            "smiles": "C=CC=CC=C",
+            "energy": -1465.8,
+            "generation": 1,
+            "formula": "C6H8"
+          }
+        ],
+        "reactions": [
+          {
+            "name": "ring_opening_benzene",
+            "reactants": [
+              {
+                "name": "benzene",
+                "smiles": "c1ccccc1",
+                "energy": -1429.8
+              }
+            ],
+            "products": [
+              {
+                "name": "benzene_hexatriene",
+                "smiles": "C=CC=CC=C",
+                "energy": -1465.8
+              }
+            ],
+            "activation_energy": 50.0,
+            "energy_change": -36.0,
+            "is_exothermic": true
+          }
+        ]
+      },
+      "message": "Universal network generation completed successfully"
+    },
+    "Functional Groups": {
+      "success": true,
+      "execution_time": 0.02746725082397461,
+      "network": {
+        "total_molecules": 3,
+        "total_reactions": 0,
+        "generations": 1,
+        "execution_time": 0.02746725082397461,
+        "generation_stats": [
+          {
+            "generation": 0,
+            "input_molecules": 3,
+            "generated_reactions": 7,
+            "feasible_reactions": 0,
+            "new_molecules": 0,
+            "total_molecules": 3,
+            "total_reactions": 0,
+            "time": 0.025836944580078125
+          }
+        ],
+        "molecules_by_generation": {
+          "0": [
+            {
+              "name": "acetone",
+              "smiles": "CC(C)=O",
+              "energy": -976.4,
+              "generation": 0
+            },
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O",
+              "energy": -852.6,
+              "generation": 0
+            },
+            {
+              "name": "nitroethane",
+              "smiles": "CC[N+](=O)[O-]",
+              "energy": -1067.5,
+              "generation": 0
+            }
+          ]
+        },
+        "reaction_types": {},
+        "energy_statistics": {
+          "min_energy": -1067.5,
+          "max_energy": -852.6,
+          "mean_energy": -965.5,
+          "std_energy": 88.0704642128487
+        },
+        "reaction_energy_statistics": {},
+        "molecules": [
+          {
+            "name": "acetone",
+            "smiles": "CC(C)=O",
+            "energy": -976.4,
+            "generation": 0,
+            "formula": "C3H6O"
+          },
+          {
+            "name": "acetic_acid",
+            "smiles": "CC(=O)O",
+            "energy": -852.6,
+            "generation": 0,
+            "formula": "C2H4O2"
+          },
+          {
+            "name": "nitroethane",
+            "smiles": "CC[N+](=O)[O-]",
+            "energy": -1067.5,
+            "generation": 0,
+            "formula": "C2H5NO2"
+          }
+        ],
+        "reactions": []
+      },
+      "message": "Universal network generation completed successfully"
+    },
+    "Metal-Free Inorganic": {
+      "success": true,
+      "execution_time": 0.017542362213134766,
+      "network": {
+        "total_molecules": 3,
+        "total_reactions": 0,
+        "generations": 1,
+        "execution_time": 0.017542362213134766,
+        "generation_stats": [
+          {
+            "generation": 0,
+            "input_molecules": 3,
+            "generated_reactions": 0,
+            "feasible_reactions": 0,
+            "new_molecules": 0,
+            "total_molecules": 3,
+            "total_reactions": 0,
+            "time": 0.016594886779785156
+          }
+        ],
+        "molecules_by_generation": {
+          "0": [
+            {
+              "name": "water",
+              "smiles": "O",
+              "energy": -236.0,
+              "generation": 0
+            },
+            {
+              "name": "ammonia",
+              "smiles": "N",
+              "energy": -295.9,
+              "generation": 0
+            },
+            {
+              "name": "hydrogen_sulfide",
+              "smiles": "S",
+              "energy": -559.1,
+              "generation": 0
+            }
+          ]
+        },
+        "reaction_types": {},
+        "energy_statistics": {
+          "min_energy": -559.1,
+          "max_energy": -236.0,
+          "mean_energy": -363.6666666666667,
+          "std_energy": 140.33921602871936
+        },
+        "reaction_energy_statistics": {},
+        "molecules": [
+          {
+            "name": "water",
+            "smiles": "O",
+            "energy": -236.0,
+            "generation": 0,
+            "formula": "H2O"
+          },
+          {
+            "name": "ammonia",
+            "smiles": "N",
+            "energy": -295.9,
+            "generation": 0,
+            "formula": "H3N"
+          },
+          {
+            "name": "hydrogen_sulfide",
+            "smiles": "S",
+            "energy": -559.1,
+            "generation": 0,
+            "formula": "H2S"
+          }
+        ],
+        "reactions": []
+      },
+      "message": "Universal network generation completed successfully"
+    }
+  },
+  "summary_statistics": [
+    {
+      "system_name": "Simple Organic Molecules",
+      "input_molecules": 3,
+      "output_molecules": 4,
+      "total_reactions": 1,
+      "generations": 2,
+      "reaction_types": 1,
+      "execution_time": 0.0669407844543457,
+      "hardcoded_free": true,
+      "success": true
+    },
+    {
+      "system_name": "Cyclic Compounds (No EC/PC)",
+      "input_molecules": 3,
+      "output_molecules": 6,
+      "total_reactions": 3,
+      "generations": 2,
+      "reaction_types": 1,
+      "execution_time": 0.12798786163330078,
+      "hardcoded_free": true,
+      "success": true
+    },
+    {
+      "system_name": "Heteroatom Compounds",
+      "input_molecules": 3,
+      "output_molecules": 3,
+      "total_reactions": 0,
+      "generations": 1,
+      "reaction_types": 0,
+      "execution_time": 0.023043155670166016,
+      "hardcoded_free": true,
+      "success": true
+    },
+    {
+      "system_name": "Aromatic System",
+      "input_molecules": 3,
+      "output_molecules": 4,
+      "total_reactions": 1,
+      "generations": 2,
+      "reaction_types": 1,
+      "execution_time": 0.08606433868408203,
+      "hardcoded_free": true,
+      "success": true
+    },
+    {
+      "system_name": "Functional Groups",
+      "input_molecules": 3,
+      "output_molecules": 3,
+      "total_reactions": 0,
+      "generations": 1,
+      "reaction_types": 0,
+      "execution_time": 0.027654409408569336,
+      "hardcoded_free": true,
+      "success": true
+    },
+    {
+      "system_name": "Metal-Free Inorganic",
+      "input_molecules": 3,
+      "output_molecules": 3,
+      "total_reactions": 0,
+      "generations": 1,
+      "reaction_types": 0,
+      "execution_time": 0.01769876480102539,
+      "hardcoded_free": true,
+      "success": true
+    }
+  ]
+}

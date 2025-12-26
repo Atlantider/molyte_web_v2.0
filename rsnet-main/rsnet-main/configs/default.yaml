@@ -1,0 +1,67 @@
+# RSNet Default Configuration
+
+# Environment settings
+environment:
+  temperature: 298.15  # K
+  pressure: 1.0       # atm
+  solvent: "gas"      # gas, water, etc.
+
+# xTB calculation settings
+xtb:
+  method: "gfn2"      # gfn1, gfn2, gfnff
+  solvent: null       # GBSA solvent model
+  charge: 0           # molecular charge
+  uhf: 0              # unpaired electrons
+  max_iterations: 250
+  convergence: 1.0e-6
+
+# Reaction screening settings
+screening:
+  max_workers: 4
+  energy_threshold: 50.0  # kcal/mol
+  optimize_geometries: true
+  activation_energy:
+    # Bell-Evans-Polanyi parameters
+    alpha: 0.5  # Linear scaling factor for endothermic reactions
+    beta: 15.0  # Intrinsic barrier for endothermic reactions (kcal/mol)
+    exothermic_barrier: 10.0  # Intrinsic barrier for exothermic reactions (kcal/mol)
+  rate_constants:
+    pre_exponential: 1.0e13  # s^-1, typical pre-exponential factor
+    temperature: 298.15  # K, reference temperature
+
+# Network generation settings
+network:
+  max_generations: 5   # maximum network depth
+  max_species: 100     # maximum number of species
+  energy_cutoff: 50.0  # kcal/mol, reactions above this are ignored
+  
+# Reaction operators
+operators:
+  hydrogen_transfer:
+    enabled: true
+    energy_threshold: 40.0  # kcal/mol
+  bond_breaking:
+    enabled: true
+    energy_threshold: 60.0
+  cyclization:
+    enabled: true
+    energy_threshold: 35.0
+  rearrangement:
+    enabled: true
+    energy_threshold: 45.0
+  addition:
+    enabled: true
+    energy_threshold: 30.0
+
+# Pruning settings
+pruning:
+  thermodynamic_filter: true
+  kinetic_filter: true
+  duplicate_removal: true
+  
+# Output settings
+output:
+  save_intermediates: true
+  save_network_graph: true
+  save_reaction_profiles: true
+  format: "json"  # json, yaml, pickle

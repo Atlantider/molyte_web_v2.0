@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+logs/
+
+# Build outputs
+frontend/dist/
+frontend/build/
+*.js.map
+
+# Database
+*.db
+*.sqlite3
+
+# Cache
+.cache/
+*.cache
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads and data
+uploads/
+data/
+*.mol2
+*.pdb
+*.xyz
+*.fchk
+*.chk
+
+# Slurm outputs
+slurm-*.out
+
+# Secrets
+secrets/
+*.pem
+*.key

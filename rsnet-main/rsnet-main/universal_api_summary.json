@@ -1,0 +1,87 @@
+{
+  "test_summary": {
+    "total_tests": 7,
+    "successful_tests": 7,
+    "failed_tests": 0,
+    "success_rate": 100.0
+  },
+  "performance_stats": {
+    "total_input_molecules": 22,
+    "total_discovered_molecules": 48,
+    "total_discovered_reactions": 147,
+    "total_execution_time": 0.3463904857635498,
+    "average_generations": 2.142857142857143
+  },
+  "detailed_stats": [
+    {
+      "system_name": "Li-ion Battery Electrolyte (LiPF6/EC)",
+      "input_molecules": 3,
+      "total_molecules": 8,
+      "total_reactions": 26,
+      "generations": 2,
+      "execution_time": 0.06573605537414551,
+      "reaction_types": 6,
+      "success": true
+    },
+    {
+      "system_name": "Na-ion Battery Electrolyte (NaClO4/PC)",
+      "input_molecules": 3,
+      "total_molecules": 7,
+      "total_reactions": 23,
+      "generations": 2,
+      "execution_time": 0.042945146560668945,
+      "reaction_types": 5,
+      "success": true
+    },
+    {
+      "system_name": "Organic Electrolyte (TFSI/DMC)",
+      "input_molecules": 3,
+      "total_molecules": 6,
+      "total_reactions": 26,
+      "generations": 2,
+      "execution_time": 0.07256674766540527,
+      "reaction_types": 5,
+      "success": true
+    },
+    {
+      "system_name": "High Voltage Cathode System",
+      "input_molecules": 3,
+      "total_molecules": 5,
+      "total_reactions": 9,
+      "generations": 2,
+      "execution_time": 0.014415264129638672,
+      "reaction_types": 3,
+      "success": true
+    },
+    {
+      "system_name": "Additive System (VC/FEC)",
+      "input_molecules": 3,
+      "total_molecules": 6,
+      "total_reactions": 10,
+      "generations": 3,
+      "execution_time": 0.03195762634277344,
+      "reaction_types": 4,
+      "success": true
+    },
+    {
+      "system_name": "Arbitrary Organic Molecules",
+      "input_molecules": 3,
+      "total_molecules": 7,
+      "total_reactions": 24,
+      "generations": 2,
+      "execution_time": 0.05278778076171875,
+      "reaction_types": 5,
+      "success": true
+    },
+    {
+      "system_name": "Mixed Metal System",
+      "input_molecules": 4,
+      "total_molecules": 9,
+      "total_reactions": 29,
+      "generations": 2,
+      "execution_time": 0.06598186492919922,
+      "reaction_types": 6,
+      "success": true
+    }
+  ]
+}

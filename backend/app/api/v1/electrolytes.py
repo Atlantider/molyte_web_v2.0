@@ -1,0 +1,1008 @@
+"""
+Electrolyte system API endpoints
+"""
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List, Dict
+import os
+from pathlib import Path
+from datetime import datetime, timezone
+from app.database import get_db
+from app.models.user import User, UserRole
+from app.models.project import Project
+from app.models.electrolyte import ElectrolyteSystem
+from app.models.job import MDJob
+from app.schemas.electrolyte import (
+    Electrolyte as ElectrolyteSchema,
+    ElectrolyteCreate,
+    ElectrolyteCreateNew,
+    ElectrolyteUpdate
+)
+from app.dependencies import get_current_active_user
+from app.utils.hash import calculate_system_hash
+from app.utils.ion_parser import scan_available_ions, get_cations_and_anions
+from app.utils.smiles_validator import validate_smiles
+from app.utils.electrolyte_converter import convert_new_to_old_format, convert_old_to_new_format
+from app.utils.permissions import require_module_access, MODULE_ELECTROLYTES
+from app.core.logger import logger
+from pydantic import BaseModel
+
+router = APIRouter()
+
+# Path to initial salts directory - 动态检测环境
+# 优先使用云端路径，找不到则使用校园网路径
+_CLOUD_SALTS_DIR = Path("/opt/molyte_web_v1.0/data/initial_salts")
+# 使用统一路径配置
+from app.core.paths import paths
+_CAMPUS_SALTS_DIR = paths.initial_salts_dir
+SALTS_DIR = _CLOUD_SALTS_DIR if _CLOUD_SALTS_DIR.exists() else _CAMPUS_SALTS_DIR
+
+# Cache for ion information (loaded on startup)
+_ions_cache = None
+_cache_timestamp = None
+
+
+def _get_salts_dir_mtime():
+    """Get the modification time of the salts directory"""
+    try:
+        if SALTS_DIR.exists():
+            return SALTS_DIR.stat().st_mtime
+    except Exception:
+        pass
+    return None
+
+
+def get_ions_info():
+    """Get cached ion information, or scan if not cached or directory changed"""
+    global _ions_cache, _cache_timestamp
+
+    current_mtime = _get_salts_dir_mtime()
+
+    # If cache is None or directory has been modified, re-scan
+    if _ions_cache is None or _cache_timestamp != current_mtime:
+        _ions_cache = scan_available_ions(SALTS_DIR)
+        _cache_timestamp = current_mtime
+        logger.info(f"Ion cache updated (mtime: {current_mtime})")
+
+    return _ions_cache
+
+
+@router.get("/label-options")
+def get_label_options(current_user: User = Depends(get_current_active_user)):
+    """
+    获取电解液标签选项列表
+    
+    用于前端显示标签选择UI
+    
+    Returns:
+        Dict with all label categories and their options
+    """
+    from app.models.electrolyte_labels import (
+        BatteryType, AnodeType, CathodeType, OperatingCondition, ElectrolyteFormType,
+        BATTERY_TYPE_NAMES, ANODE_TYPE_NAMES, CATHODE_TYPE_NAMES, 
+        CONDITION_NAMES, ELECTROLYTE_TYPE_NAMES
+    )
+    
+    def enum_to_options(enum_class, names_map):
+        return [
+            {"value": e.value, "label": names_map.get(e, e.value)}
+            for e in enum_class
+        ]
+    
+    return {
+        "battery_type": {
+            "label": "电池类型",
+            "type": "single",
+            "options": enum_to_options(BatteryType, BATTERY_TYPE_NAMES)
+        },
+        "anode_types": {
+            "label": "负极材料",
+            "type": "multiple",
+            "options": enum_to_options(AnodeType, ANODE_TYPE_NAMES)
+        },
+        "cathode_types": {
+            "label": "正极材料",
+            "type": "multiple",
+            "options": enum_to_options(CathodeType, CATHODE_TYPE_NAMES)
+        },
+        "conditions": {
+            "label": "工作条件",
+            "type": "multiple",
+            "options": enum_to_options(OperatingCondition, CONDITION_NAMES)
+        },
+        "electrolyte_type": {
+            "label": "电解液类型",
+            "type": "single",
+            "options": enum_to_options(ElectrolyteFormType, ELECTROLYTE_TYPE_NAMES)
+        }
+    }
+
+
+@router.get("/available-ions")
+def get_available_ions_endpoint(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Get list of available cations and anions with their charges
+    Combines data from .lt files in the initial_salts directory and AnionLibrary database
+
+    Args:
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Dict with 'cations' and 'anions' lists, each containing {name, charge}
+    """
+    # Get ions from file system (existing method)
+    file_ions_info = get_ions_info()
+    file_cations, file_anions = get_cations_and_anions(file_ions_info)
+    
+    # 获取文件系统中存在的阴离子名称（用于同步检查）
+    file_anion_names = {a["name"] for a in file_anions}
+
+    # Get anions from database (AnionLibrary)
+    from app.models.forcefield import AnionLibrary
+    db_anions_query = db.query(AnionLibrary).filter(
+        AnionLibrary.is_deleted == False
+    ).all()
+
+    # 同步检查：标记已删除的阴离子（文件不存在但数据库中有记录）
+    orphaned_count = 0
+    for anion in db_anions_query:
+        # 检查 .lt 文件是否存在
+        lt_file = SALTS_DIR / f"{anion.anion_name}.lt"
+        if not lt_file.exists() and anion.anion_name not in file_anion_names:
+            logger.info(f"Marking orphaned anion as deleted: {anion.anion_name} (file not found)")
+            anion.is_deleted = True
+            orphaned_count += 1
+    
+    if orphaned_count > 0:
+        db.commit()
+        logger.info(f"Cleaned up {orphaned_count} orphaned anion(s) from database")
+        # 重新查询
+        db_anions_query = db.query(AnionLibrary).filter(
+            AnionLibrary.is_deleted == False
+        ).all()
+
+    db_anions = []
+    for anion in db_anions_query:
+        db_anions.append({
+            "name": anion.anion_name,
+            "charge": anion.charge
+        })
+
+    # Combine and deduplicate anions (database takes precedence)
+    anion_names_from_db = {anion["name"] for anion in db_anions}
+    combined_anions = db_anions.copy()
+
+    # Add file-based anions that are not in database
+    for anion in file_anions:
+        if anion["name"] not in anion_names_from_db:
+            combined_anions.append(anion)
+
+    # Cations still come from file system only (for now)
+    combined_cations = file_cations
+
+    logger.info(f"Available ions requested by {current_user.username}: "
+                f"{len(combined_cations)} cations, {len(combined_anions)} anions "
+                f"(DB: {len(db_anions)}, Files: {len(file_anions)})")
+
+    return {
+        "cations": combined_cations,
+        "anions": combined_anions
+    }
+
+
+@router.post("/refresh-ions")
+def refresh_ions_cache(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Refresh the ion cache by re-scanning the salts directory and database
+    Useful after adding new .lt files or anions
+
+    Args:
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Updated ion lists
+    """
+    global _ions_cache
+    _ions_cache = None  # Clear cache
+
+    # Use the same logic as get_available_ions_endpoint
+    # Get ions from file system (existing method)
+    file_ions_info = get_ions_info()  # Re-scan files
+    file_cations, file_anions = get_cations_and_anions(file_ions_info)
+
+    # Get anions from database (AnionLibrary)
+    from app.models.forcefield import AnionLibrary
+    db_anions_query = db.query(AnionLibrary).filter(
+        AnionLibrary.is_deleted == False
+    ).all()
+
+    db_anions = []
+    for anion in db_anions_query:
+        db_anions.append({
+            "name": anion.anion_name,
+            "charge": anion.charge
+        })
+
+    # Combine and deduplicate anions (database takes precedence)
+    anion_names_from_db = {anion["name"] for anion in db_anions}
+    combined_anions = db_anions.copy()
+
+    # Add file-based anions that are not in database
+    for anion in file_anions:
+        if anion["name"] not in anion_names_from_db:
+            combined_anions.append(anion)
+
+    # Cations still come from file system only (for now)
+    combined_cations = file_cations
+
+    logger.info(f"Ion cache refreshed by {current_user.username}: "
+                f"{len(combined_cations)} cations, {len(combined_anions)} anions "
+                f"(DB: {len(db_anions)}, Files: {len(file_anions)})")
+
+    return {
+        "message": "Ion cache refreshed successfully",
+        "cations": combined_cations,
+        "anions": combined_anions
+    }
+
+
+class ValidateSmilesRequest(BaseModel):
+    smiles: str
+
+
+@router.post("/validate-smiles")
+def validate_smiles_endpoint(
+    request: ValidateSmilesRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Validate a SMILES string and get molecule information
+
+    Args:
+        request: Request containing SMILES string
+        current_user: Current authenticated user
+
+    Returns:
+        Validation result with molecule information
+    """
+    result = validate_smiles(request.smiles)
+    logger.info(f"SMILES validation by {current_user.username}: {request.smiles} -> valid={result.get('valid', False)}")
+    return result
+
+
+@router.post("/new", response_model=ElectrolyteSchema, status_code=status.HTTP_201_CREATED)
+def create_electrolyte_new_format(
+    electrolyte_data: ElectrolyteCreateNew,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Create a new electrolyte system using new format (concentration-based)
+
+    Args:
+        electrolyte_data: Electrolyte creation data (new format)
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Electrolyte: Created electrolyte system
+
+    Raises:
+        HTTPException: If project not found or validation fails
+    """
+    # Check module access
+    require_module_access(current_user, MODULE_ELECTROLYTES)
+    logger.info(f"Creating electrolyte (new format) by {current_user.username}")
+    try:
+        logger.info(f"Request data: {electrolyte_data.dict()}")
+    except:
+        logger.info(f"Request data: {electrolyte_data}")
+
+    # Check if project exists and user has permission
+    project = db.query(Project).filter(Project.id == electrolyte_data.project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+
+    if project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to create electrolytes in this project"
+        )
+
+    # Convert new format to old format
+    try:
+        old_format_data = convert_new_to_old_format(electrolyte_data)
+    except Exception as e:
+        logger.error(f"Error converting electrolyte data: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error converting electrolyte data: {str(e)}"
+        )
+
+    # Generate electrolyte name with EL-YYYYMMDD-全局序号 prefix
+    from datetime import date, datetime
+    from sqlalchemy import func
+
+    today = date.today()
+    date_str = today.strftime('%Y%m%d')
+    today_start = datetime.combine(today, datetime.min.time())
+    today_end = datetime.combine(today, datetime.max.time())
+
+    # Count ALL electrolytes created today (global count, not per-user)
+    count = db.query(func.count(ElectrolyteSystem.id)).filter(
+        ElectrolyteSystem.created_at >= today_start,
+        ElectrolyteSystem.created_at <= today_end
+    ).scalar()
+
+    # Next sequential number (starting from 1)
+    seq_number = count + 1
+
+    # Format: EL-YYYYMMDD-序号-自动生成的描述
+    description = old_format_data["name"]  # Auto-generated description from composition
+    user_note = old_format_data.get("user_note", None)  # Get user_note before modifying name
+
+    logger.info(f"Description from converter: {description}")
+    logger.info(f"User note from converter: {user_note}")
+
+    electrolyte_name = f"EL-{date_str}-{seq_number:04d}-{description}"
+    old_format_data["name"] = electrolyte_name
+
+    logger.info(f"Generated electrolyte name (global): {electrolyte_name}")
+
+    # Extract user_note if present (will be stored separately)
+    user_note = old_format_data.pop("user_note", None)
+
+    # Create ElectrolyteCreate object from converted data
+    create_data = ElectrolyteCreate(**old_format_data)
+
+    # Calculate hash - convert Pydantic objects to dicts
+    hash_key = calculate_system_hash(
+        cations=[c.dict() if hasattr(c, 'dict') else c for c in create_data.cations],
+        anions=[a.dict() if hasattr(a, 'dict') else a for a in create_data.anions],
+        solvents=[s.dict() if hasattr(s, 'dict') else s for s in create_data.solvents] if create_data.solvents else [],
+        temperature=create_data.temperature,
+        pressure=create_data.pressure
+    )
+
+    # Check for duplicate
+    existing = db.query(ElectrolyteSystem).filter(
+        ElectrolyteSystem.hash_key == hash_key
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An identical electrolyte system already exists (ID: {existing.id})"
+        )
+
+    # Create new electrolyte system
+    db_electrolyte = ElectrolyteSystem(
+        **create_data.dict(),
+        hash_key=hash_key,
+        user_note=user_note,  # Store user's custom name separately
+        labels=electrolyte_data.labels or {}  # Store classification labels
+    )
+
+    db.add(db_electrolyte)
+    db.commit()
+    db.refresh(db_electrolyte)
+
+    logger.info(f"Created electrolyte system (new format) {db_electrolyte.id} by {current_user.username}, labels={electrolyte_data.labels}")
+
+    return db_electrolyte
+
+
+@router.post("/", response_model=ElectrolyteSchema, status_code=status.HTTP_201_CREATED)
+def create_electrolyte(
+    electrolyte_data: ElectrolyteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Create a new electrolyte system
+
+    Args:
+        electrolyte_data: Electrolyte creation data
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Electrolyte: Created electrolyte system
+
+    Raises:
+        HTTPException: If project not found or duplicate system
+    """
+    # Check module access
+    require_module_access(current_user, MODULE_ELECTROLYTES)
+
+    # Check if project exists and user has permission
+    project = db.query(Project).filter(Project.id == electrolyte_data.project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+
+    if project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+
+    # Calculate hash key
+    hash_key = calculate_system_hash(
+        cations=[c.model_dump() for c in electrolyte_data.cations],
+        anions=[a.model_dump() for a in electrolyte_data.anions],
+        solvents=[s.model_dump() for s in electrolyte_data.solvents] if electrolyte_data.solvents else [],
+        temperature=electrolyte_data.temperature,
+        pressure=electrolyte_data.pressure
+    )
+
+    # Check for duplicate
+    existing = db.query(ElectrolyteSystem).filter(
+        ElectrolyteSystem.hash_key == hash_key
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Duplicate electrolyte system (ID: {existing.id})"
+        )
+
+    # Create electrolyte system
+    db_electrolyte = ElectrolyteSystem(
+        project_id=electrolyte_data.project_id,
+        hash_key=hash_key,
+        name=electrolyte_data.name,
+        cations=[c.model_dump() for c in electrolyte_data.cations],
+        anions=[a.model_dump() for a in electrolyte_data.anions],
+        solvents=[s.model_dump() for s in electrolyte_data.solvents] if electrolyte_data.solvents else None,
+        temperature=electrolyte_data.temperature,
+        pressure=electrolyte_data.pressure,
+        density=electrolyte_data.density,
+        concentration=electrolyte_data.concentration,
+        box_size=electrolyte_data.box_size,
+        nsteps_npt=electrolyte_data.nsteps_npt,
+        nsteps_nvt=electrolyte_data.nsteps_nvt,
+        timestep=electrolyte_data.timestep,
+        force_field=electrolyte_data.force_field
+    )
+
+    db.add(db_electrolyte)
+    db.commit()
+    db.refresh(db_electrolyte)
+
+    logger.info(f"Electrolyte system created: {db_electrolyte.name}")
+    return db_electrolyte
+
+
+@router.get("/", response_model=List[ElectrolyteSchema])
+def list_electrolytes(
+    project_id: int = None,
+    skip: int = 0,
+    limit: int = 100,
+    include_deleted: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    List electrolyte systems
+
+    Args:
+        project_id: Filter by project ID
+        skip: Number of records to skip
+        limit: Maximum number of records to return
+        include_deleted: 是否包含已删除的配方（仅管理员）
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        List[Electrolyte]: List of electrolyte systems
+    """
+    from sqlalchemy import or_
+
+    # 管理员可以看到所有配方，普通用户只能看到自己的配方
+    if current_user.role == UserRole.ADMIN:
+        # 管理员：使用 join 查询，获取用户信息
+        query = db.query(ElectrolyteSystem, User).join(
+            Project, ElectrolyteSystem.project_id == Project.id
+        ).join(
+            User, Project.user_id == User.id
+        )
+    else:
+        # 普通用户：只查询自己的配方
+        query = db.query(ElectrolyteSystem)
+
+    # Filter by project if specified
+    if project_id:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        if project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enough permissions"
+            )
+
+        if current_user.role == UserRole.ADMIN:
+            query = query.filter(ElectrolyteSystem.project_id == project_id)
+        else:
+            query = query.filter(ElectrolyteSystem.project_id == project_id)
+    else:
+        # Show only user's electrolytes unless admin
+        if current_user.role != UserRole.ADMIN:
+            user_project_ids = [p.id for p in current_user.projects]
+            query = query.filter(ElectrolyteSystem.project_id.in_(user_project_ids))
+
+    # 配方使用硬删除，不需要过滤 is_deleted
+    # 已删除的配方会从数据库中移除
+
+    # Order by created_at descending (newest first)
+    if current_user.role == UserRole.ADMIN:
+        query = query.order_by(ElectrolyteSystem.created_at.desc())
+        results = query.offset(skip).limit(limit).all()
+
+        # 为管理员添加用户信息
+        electrolyte_list = []
+        for electrolyte, user in results:
+            electrolyte_dict = {
+                "id": electrolyte.id,
+                "project_id": electrolyte.project_id,
+                "name": electrolyte.name,
+                "cations": electrolyte.cations,
+                "anions": electrolyte.anions,
+                "solvents": electrolyte.solvents,
+                "temperature": electrolyte.temperature,
+                "pressure": electrolyte.pressure,
+                "density": electrolyte.density,
+                "concentration": electrolyte.concentration,
+                "box_size": electrolyte.box_size,
+                "nsteps_npt": electrolyte.nsteps_npt,
+                "nsteps_nvt": electrolyte.nsteps_nvt,
+                "timestep": electrolyte.timestep,
+                "force_field": electrolyte.force_field,
+                "hash_key": electrolyte.hash_key,
+                "created_at": electrolyte.created_at,
+                # 添加用户信息（仅管理员可见）
+                "username": user.username,
+                "user_email": user.email,
+            }
+            electrolyte_list.append(electrolyte_dict)
+        return electrolyte_list
+    else:
+        # 普通用户：直接返回配方列表
+        query = query.order_by(ElectrolyteSystem.created_at.desc())
+        electrolytes = query.offset(skip).limit(limit).all()
+        return electrolytes
+
+
+@router.get("/{electrolyte_id}", response_model=ElectrolyteSchema)
+def get_electrolyte(
+    electrolyte_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Get electrolyte system by ID
+
+    Args:
+        electrolyte_id: Electrolyte system ID
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Electrolyte: Electrolyte system data
+
+    Raises:
+        HTTPException: If not found or no permission
+    """
+    from datetime import datetime
+    from app.models.job import DataVisibility
+
+    electrolyte = db.query(ElectrolyteSystem).filter(
+        ElectrolyteSystem.id == electrolyte_id
+    ).first()
+
+    if not electrolyte:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Electrolyte system not found"
+        )
+
+    # Check permission
+    # 允许访问：1. 自己的数据 2. 管理员 3. 关联的MD任务是公开的
+    is_owner = electrolyte.project.user_id == current_user.id
+    is_admin = current_user.role == UserRole.ADMIN
+
+    # 检查是否有关联的公开MD任务
+    has_public_job = db.query(MDJob).filter(
+        MDJob.system_id == electrolyte_id,
+        MDJob.visibility == DataVisibility.PUBLIC
+    ).first() is not None
+
+    # 检查是否有关联的已过延期的MD任务
+    now_utc = datetime.now(timezone.utc)
+    has_delayed_expired_job = db.query(MDJob).filter(
+        MDJob.system_id == electrolyte_id,
+        MDJob.visibility == DataVisibility.DELAYED,
+        MDJob.visibility_delay_until <= now_utc
+    ).first() is not None
+
+    if not (is_owner or is_admin or has_public_job or has_delayed_expired_job):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+
+    return electrolyte
+
+
+
+@router.get("/{electrolyte_id}/editable", response_model=dict)
+def get_electrolyte_editable(
+    electrolyte_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Get electrolyte system in editable format (new format with concentrations)
+
+    Args:
+        electrolyte_id: Electrolyte system ID
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        dict: Electrolyte data in new format for editing
+    """
+    electrolyte = db.query(ElectrolyteSystem).filter(
+        ElectrolyteSystem.id == electrolyte_id
+    ).first()
+
+    if not electrolyte:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Electrolyte system not found"
+        )
+
+    # Check permission
+    if electrolyte.project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+
+    # Convert to editable format
+    editable_data = convert_old_to_new_format(electrolyte)
+
+    logger.info(f"Retrieved editable format for electrolyte {electrolyte_id} by {current_user.username}")
+
+    return editable_data
+
+
+@router.put("/{electrolyte_id}", response_model=ElectrolyteSchema)
+def update_electrolyte(
+    electrolyte_id: int,
+    electrolyte_data: ElectrolyteCreateNew,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Update an existing electrolyte system using new format
+
+    Args:
+        electrolyte_id: Electrolyte system ID
+        electrolyte_data: Updated electrolyte data in new format
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Electrolyte: Updated electrolyte system
+    """
+    # Get existing electrolyte
+    electrolyte = db.query(ElectrolyteSystem).filter(
+        ElectrolyteSystem.id == electrolyte_id
+    ).first()
+
+    if not electrolyte:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Electrolyte system not found"
+        )
+
+    # Check permission
+    if electrolyte.project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+
+    # Convert new format to old format
+    try:
+        old_format_data = convert_new_to_old_format(electrolyte_data)
+    except Exception as e:
+        logger.error(f"Error converting electrolyte data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error converting electrolyte data: {str(e)}"
+        )
+
+    # 保留原始的 EL-YYYYMMDD-序号 前缀，完全替换描述部分
+    # 这样可以防止编辑时名称被重复
+    import re
+    original_name = electrolyte.name
+    prefix_match = re.match(r'^(EL-\d{8}-\d{4})-', original_name)
+
+    if prefix_match:
+        # 保留原始前缀，使用新的描述
+        prefix = prefix_match.group(1)
+        new_description = old_format_data["name"]
+
+        # 如果新描述已经包含前缀，说明前端发送的是完整名称，直接使用
+        if new_description.startswith("EL-"):
+            electrolyte_name = new_description
+        else:
+            # 新描述不包含前缀，添加前缀
+            electrolyte_name = f"{prefix}-{new_description}"
+
+        logger.info(f"Updating electrolyte name: {original_name} -> {electrolyte_name}")
+    else:
+        # 旧格式名称（不包含前缀），直接使用
+        electrolyte_name = old_format_data["name"]
+        logger.info(f"Electrolyte has old format name, keeping: {electrolyte_name}")
+
+    old_format_data["name"] = electrolyte_name
+
+    # Create ElectrolyteCreate object from converted data
+    create_data = ElectrolyteCreate(**old_format_data)
+
+    # Calculate new hash
+    new_hash_key = calculate_system_hash(
+        cations=[c.dict() if hasattr(c, 'dict') else c for c in create_data.cations],
+        anions=[a.dict() if hasattr(a, 'dict') else a for a in create_data.anions],
+        solvents=[s.dict() if hasattr(s, 'dict') else s for s in create_data.solvents] if create_data.solvents else [],
+        temperature=create_data.temperature,
+        pressure=create_data.pressure
+    )
+
+    # Check if new hash conflicts with another system
+    if new_hash_key != electrolyte.hash_key:
+        existing = db.query(ElectrolyteSystem).filter(
+            ElectrolyteSystem.hash_key == new_hash_key,
+            ElectrolyteSystem.id != electrolyte_id
+        ).first()
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An identical electrolyte system already exists (ID: {existing.id})"
+            )
+
+    # Update electrolyte fields
+    electrolyte.project_id = create_data.project_id
+    electrolyte.name = create_data.name
+    electrolyte.hash_key = new_hash_key
+    # Convert Pydantic objects to dicts for JSONB storage
+    electrolyte.cations = [c.dict() if hasattr(c, 'dict') else c for c in create_data.cations]
+    electrolyte.anions = [a.dict() if hasattr(a, 'dict') else a for a in create_data.anions]
+    electrolyte.solvents = [s.dict() if hasattr(s, 'dict') else s for s in create_data.solvents]
+    electrolyte.temperature = create_data.temperature
+    electrolyte.pressure = create_data.pressure
+    electrolyte.box_size = create_data.box_size
+    electrolyte.nsteps_npt = create_data.nsteps_npt
+    electrolyte.nsteps_nvt = create_data.nsteps_nvt
+    electrolyte.timestep = create_data.timestep
+    electrolyte.force_field = create_data.force_field
+
+    db.commit()
+    db.refresh(electrolyte)
+
+    logger.info(f"Updated electrolyte system {electrolyte_id} by {current_user.username}")
+
+    return electrolyte
+
+
+
+@router.delete("/{electrolyte_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_electrolyte(
+    electrolyte_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Delete an electrolyte system (软删除 - 保留数据)
+
+    Args:
+        electrolyte_id: Electrolyte system ID
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        None (204 No Content)
+    """
+    from datetime import datetime
+
+    # Get existing electrolyte
+    electrolyte = db.query(ElectrolyteSystem).filter(
+        ElectrolyteSystem.id == electrolyte_id
+    ).first()
+
+    if not electrolyte:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Electrolyte system not found"
+        )
+
+    # Check permission
+    if electrolyte.project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+
+    # 检查是否有关联的任务
+    has_jobs = db.query(MDJob).filter(
+        MDJob.system_id == electrolyte_id,
+        MDJob.is_deleted == False
+    ).first()
+
+    if has_jobs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无法删除配方：该配方有关联的MD任务。请先删除所有关联任务，或者保留配方。"
+        )
+
+    # 硬删除电解质配方（配方本身不重要，可以重新创建）
+    db.delete(electrolyte)
+    db.commit()
+
+    logger.info(f"Deleted electrolyte system {electrolyte_id} by {current_user.username}")
+
+    return None
+
+
+class BatchUpdateProjectRequest(BaseModel):
+    ids: List[int]
+    project_id: int
+
+
+class BatchDeleteRequest(BaseModel):
+    """批量删除请求"""
+    ids: List[int]
+
+
+@router.delete("/batch/delete")
+def batch_delete_electrolytes(
+    request: BatchDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    批量删除电解质配方（硬删除）
+
+    只能删除用户自己的配方，或管理员可以删除所有配方
+    """
+    ids = request.ids
+    logger.info(f"Batch delete request: ids={ids}, user={current_user.username}")
+
+    deleted_count = 0
+    failed_ids = []
+    failed_reasons = {}
+
+    for electrolyte_id in ids:
+        electrolyte = db.query(ElectrolyteSystem).filter(ElectrolyteSystem.id == electrolyte_id).first()
+        if not electrolyte:
+            failed_ids.append(electrolyte_id)
+            failed_reasons[electrolyte_id] = "配方不存在"
+            logger.warning(f"Electrolyte {electrolyte_id} not found")
+            continue
+
+        # 检查权限 - 通过project关系获取用户ID
+        if electrolyte.project is None:
+            # 配方没有关联项目，允许删除
+            pass
+        elif electrolyte.project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+            failed_ids.append(electrolyte_id)
+            failed_reasons[electrolyte_id] = "无权限删除"
+            logger.warning(f"No permission to delete electrolyte {electrolyte_id}")
+            continue
+
+        # 检查是否有关联的任务
+        has_jobs = db.query(MDJob).filter(
+            MDJob.system_id == electrolyte_id,
+            MDJob.is_deleted == False
+        ).first()
+
+        if has_jobs:
+            failed_ids.append(electrolyte_id)
+            failed_reasons[electrolyte_id] = "存在关联的任务"
+            logger.warning(f"Electrolyte {electrolyte_id} has associated jobs")
+            continue
+
+        # 硬删除
+        db.delete(electrolyte)
+        deleted_count += 1
+        logger.info(f"Deleted electrolyte {electrolyte_id}")
+
+    db.commit()
+
+    logger.info(f"Batch deleted {deleted_count} electrolyte systems by {current_user.username}, failed: {failed_reasons}")
+
+    # 构建返回信息
+    if deleted_count > 0 and not failed_ids:
+        message = f"成功删除 {deleted_count} 个配方"
+    elif deleted_count > 0 and failed_ids:
+        message = f"成功删除 {deleted_count} 个配方，{len(failed_ids)} 个删除失败"
+    else:
+        message = f"删除失败：{len(failed_ids)} 个配方无法删除"
+
+    return {
+        "deleted_count": deleted_count,
+        "failed_ids": failed_ids,
+        "failed_reasons": failed_reasons,
+        "message": message
+    }
+
+
+@router.put("/batch/project")
+def batch_update_project(
+    request: BatchUpdateProjectRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    批量更改电解质配方的项目归属
+
+    只能更改用户自己的配方到自己的项目
+    """
+    from app.models.project import Project
+
+    # 验证目标项目存在且属于当前用户
+    target_project = db.query(Project).filter(Project.id == request.project_id).first()
+    if not target_project:
+        raise HTTPException(status_code=404, detail="目标项目不存在")
+
+    if target_project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="无权操作目标项目")
+
+    updated_count = 0
+    failed_ids = []
+
+    for electrolyte_id in request.ids:
+        electrolyte = db.query(ElectrolyteSystem).filter(ElectrolyteSystem.id == electrolyte_id).first()
+        if not electrolyte:
+            failed_ids.append(electrolyte_id)
+            continue
+
+        # 检查权限
+        if electrolyte.project.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+            failed_ids.append(electrolyte_id)
+            continue
+
+        # 更新项目归属
+        electrolyte.project_id = request.project_id
+        updated_count += 1
+
+    db.commit()
+
+    logger.info(f"Batch updated {updated_count} electrolyte systems to project {request.project_id} by {current_user.username}")
+
+    return {
+        "updated_count": updated_count,
+        "failed_ids": failed_ids,
+        "message": f"成功移动 {updated_count} 个配方到项目 '{target_project.name}'"
+    }

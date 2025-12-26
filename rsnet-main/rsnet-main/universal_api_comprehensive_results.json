@@ -1,0 +1,3462 @@
+{
+  "Li-ion Battery Electrolyte (LiPF6/EC)": {
+    "success": true,
+    "execution_time": 0.06007981300354004,
+    "network": {
+      "total_molecules": 8,
+      "total_reactions": 26,
+      "generations": 2,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 3,
+          "generated_reactions": 8,
+          "feasible_reactions": 8,
+          "new_molecules": 5,
+          "total_molecules": 8,
+          "total_reactions": 8,
+          "time": 0.012418746948242188
+        },
+        {
+          "generation": 1,
+          "input_molecules": 5,
+          "generated_reactions": 18,
+          "feasible_reactions": 18,
+          "new_molecules": 0,
+          "total_molecules": 8,
+          "total_reactions": 26,
+          "time": 0.04333233833312988
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "Li_ion",
+            "smiles": "[Li+]"
+          },
+          {
+            "name": "PF6_anion",
+            "smiles": "F[P-](F)(F)(F)(F)F"
+          },
+          {
+            "name": "EC",
+            "smiles": "O=C1OCCO1"
+          }
+        ],
+        "1": [
+          {
+            "name": "Li_ion_reduced",
+            "smiles": "C"
+          },
+          {
+            "name": "EC_frag2",
+            "smiles": "O"
+          },
+          {
+            "name": "EC_ethylene",
+            "smiles": "C=C"
+          },
+          {
+            "name": "EC_CO2",
+            "smiles": "O=C=O"
+          },
+          {
+            "name": "EC_EC_adduct",
+            "smiles": "CO"
+          }
+        ]
+      },
+      "reaction_types": {
+        "reduction": 5,
+        "bond": 7,
+        "ring": 1,
+        "coordination": 2,
+        "nucleophilic": 6,
+        "acid": 5
+      },
+      "reactions": [
+        {
+          "name": "reduction_Li_ion",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "bond_breaking_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "bond_breaking_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "bond_breaking_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "ring_opening_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_ethylene",
+              "smiles": "C=C"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "activation_energy": 45.0
+        },
+        {
+          "name": "coordination_Li_ion_PF6_anion",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "PF6_anion",
+              "smiles": "F[P-](F)(F)(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_PF6_anion_complex",
+              "smiles": "F[P-](F)(F)(F)(F)F"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "coordination_Li_ion_EC",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_EC_complex",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            },
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "reduction_Li_ion_reduced",
+          "reactants": [
+            {
+              "name": "Li_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_reduced_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "bond_breaking_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "reduction_EC_ethylene",
+          "reactants": [
+            {
+              "name": "EC_ethylene",
+              "smiles": "C=C"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_ethylene_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 15.999999999999996
+        },
+        {
+          "name": "bond_breaking_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_EC_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_EC_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "acid_base_EC_frag2_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_frag2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "acid_base_EC_frag2_EC_CO2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_CO2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_frag2_EC_CO2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_CO2_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EC_frag2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_EC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_frag2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_EC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_CO2_EC_CO2",
+          "reactants": [
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_CO2_EC_CO2_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EC_CO2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_CO2_EC_EC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_CO2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_CO2_EC_EC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EC_EC_adduct_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_EC_EC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_EC_adduct_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_EC_EC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  },
+  "Na-ion Battery Electrolyte (NaClO4/PC)": {
+    "success": true,
+    "execution_time": 0.03878664970397949,
+    "network": {
+      "total_molecules": 7,
+      "total_reactions": 23,
+      "generations": 2,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 3,
+          "generated_reactions": 10,
+          "feasible_reactions": 10,
+          "new_molecules": 4,
+          "total_molecules": 7,
+          "total_reactions": 10,
+          "time": 0.008891105651855469
+        },
+        {
+          "generation": 1,
+          "input_molecules": 4,
+          "generated_reactions": 13,
+          "feasible_reactions": 13,
+          "new_molecules": 0,
+          "total_molecules": 7,
+          "total_reactions": 23,
+          "time": 0.02928328514099121
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "Na_ion",
+            "smiles": "[Na+]"
+          },
+          {
+            "name": "ClO4_anion",
+            "smiles": "[O-][Cl+3]([O-])([O-])[O-]"
+          },
+          {
+            "name": "PC",
+            "smiles": "CC1COC(=O)O1"
+          }
+        ],
+        "1": [
+          {
+            "name": "Na_ion_reduced",
+            "smiles": "C"
+          },
+          {
+            "name": "ClO4_anion_frag2",
+            "smiles": "O"
+          },
+          {
+            "name": "PC_opened",
+            "smiles": "CC"
+          },
+          {
+            "name": "ClO4_anion_PC_adduct",
+            "smiles": "CO"
+          }
+        ]
+      },
+      "reaction_types": {
+        "reduction": 5,
+        "bond": 10,
+        "ring": 1,
+        "nucleophilic": 4,
+        "acid": 3
+      },
+      "reactions": [
+        {
+          "name": "reduction_Na_ion",
+          "reactants": [
+            {
+              "name": "Na_ion",
+              "smiles": "[Na+]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Na_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "bond_breaking_ClO4_anion",
+          "reactants": [
+            {
+              "name": "ClO4_anion",
+              "smiles": "[O-][Cl+3]([O-])([O-])[O-]"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ClO4_anion",
+          "reactants": [
+            {
+              "name": "ClO4_anion",
+              "smiles": "[O-][Cl+3]([O-])([O-])[O-]"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ClO4_anion",
+          "reactants": [
+            {
+              "name": "ClO4_anion",
+              "smiles": "[O-][Cl+3]([O-])([O-])[O-]"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_PC",
+          "reactants": [
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "PC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "PC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "bond_breaking_PC",
+          "reactants": [
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "PC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "PC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "bond_breaking_PC",
+          "reactants": [
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "PC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "PC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "ring_opening_PC",
+          "reactants": [
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "PC_opened",
+              "smiles": "CC"
+            }
+          ],
+          "activation_energy": 45.0
+        },
+        {
+          "name": "nucleophilic_addition_ClO4_anion_PC",
+          "reactants": [
+            {
+              "name": "ClO4_anion",
+              "smiles": "[O-][Cl+3]([O-])([O-])[O-]"
+            },
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "nucleophilic_addition_PC_PC",
+          "reactants": [
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            },
+            {
+              "name": "PC",
+              "smiles": "CC1COC(=O)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "PC_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "reduction_Na_ion_reduced",
+          "reactants": [
+            {
+              "name": "Na_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "products": [
+            {
+              "name": "Na_ion_reduced_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "bond_breaking_ClO4_anion_frag2",
+          "reactants": [
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ClO4_anion_frag2",
+          "reactants": [
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_ClO4_anion_frag2",
+          "reactants": [
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag2_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "reduction_PC_opened",
+          "reactants": [
+            {
+              "name": "PC_opened",
+              "smiles": "CC"
+            }
+          ],
+          "products": [
+            {
+              "name": "PC_opened_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "bond_breaking_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_PC_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_PC_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_PC_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ClO4_anion_PC_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_PC_adduct_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "acid_base_ClO4_anion_frag2_ClO4_anion_frag2",
+          "reactants": [
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag2_ClO4_anion_frag2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "acid_base_ClO4_anion_frag2_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag2_ClO4_anion_PC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_ClO4_anion_frag2_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_frag2_ClO4_anion_PC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_ClO4_anion_PC_adduct_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_PC_adduct_ClO4_anion_PC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_ClO4_anion_PC_adduct_ClO4_anion_PC_adduct",
+          "reactants": [
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "ClO4_anion_PC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ClO4_anion_PC_adduct_ClO4_anion_PC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  },
+  "Organic Electrolyte (TFSI/DMC)": {
+    "success": true,
+    "execution_time": 0.0648200511932373,
+    "network": {
+      "total_molecules": 6,
+      "total_reactions": 26,
+      "generations": 2,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 3,
+          "generated_reactions": 14,
+          "feasible_reactions": 14,
+          "new_molecules": 3,
+          "total_molecules": 6,
+          "total_reactions": 14,
+          "time": 0.014202356338500977
+        },
+        {
+          "generation": 1,
+          "input_molecules": 3,
+          "generated_reactions": 12,
+          "feasible_reactions": 12,
+          "new_molecules": 0,
+          "total_molecules": 6,
+          "total_reactions": 26,
+          "time": 0.04590272903442383
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "Li_ion",
+            "smiles": "[Li+]"
+          },
+          {
+            "name": "TFSI_anion",
+            "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+          },
+          {
+            "name": "DMC",
+            "smiles": "COC(=O)OC"
+          }
+        ],
+        "1": [
+          {
+            "name": "Li_ion_reduced",
+            "smiles": "C"
+          },
+          {
+            "name": "TFSI_anion_frag2",
+            "smiles": "O"
+          },
+          {
+            "name": "TFSI_anion_TFSI_anion_adduct",
+            "smiles": "CO"
+          }
+        ]
+      },
+      "reaction_types": {
+        "reduction": 4,
+        "bond": 10,
+        "coordination": 2,
+        "acid": 5,
+        "nucleophilic": 5
+      },
+      "reactions": [
+        {
+          "name": "reduction_Li_ion",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_DMC",
+          "reactants": [
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "DMC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "DMC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 68.8
+        },
+        {
+          "name": "bond_breaking_DMC",
+          "reactants": [
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "DMC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "DMC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 68.8
+        },
+        {
+          "name": "bond_breaking_DMC",
+          "reactants": [
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "DMC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "DMC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 68.8
+        },
+        {
+          "name": "coordination_Li_ion_TFSI_anion",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_TFSI_anion_complex",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "coordination_Li_ion_DMC",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_DMC_complex",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "acid_base_TFSI_anion_TFSI_anion",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            },
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_TFSI_anion_TFSI_anion",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            },
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_TFSI_anion_DMC",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            },
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_DMC_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_TFSI_anion_DMC",
+          "reactants": [
+            {
+              "name": "TFSI_anion",
+              "smiles": "O=S(=O)(NS(=O)(=O)C(F)(F)F)C(F)(F)F"
+            },
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_DMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "nucleophilic_addition_DMC_DMC",
+          "reactants": [
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            },
+            {
+              "name": "DMC",
+              "smiles": "COC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "DMC_DMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "reduction_Li_ion_reduced",
+          "reactants": [
+            {
+              "name": "Li_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_reduced_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion_frag2",
+          "reactants": [
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion_frag2",
+          "reactants": [
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_TFSI_anion_frag2",
+          "reactants": [
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag2_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "acid_base_TFSI_anion_frag2_TFSI_anion_frag2",
+          "reactants": [
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag2_TFSI_anion_frag2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "acid_base_TFSI_anion_frag2_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag2_TFSI_anion_TFSI_anion_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_TFSI_anion_frag2_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_frag2_TFSI_anion_TFSI_anion_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_TFSI_anion_TFSI_anion_adduct_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_TFSI_anion_TFSI_anion_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_TFSI_anion_TFSI_anion_adduct_TFSI_anion_TFSI_anion_adduct",
+          "reactants": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "TFSI_anion_TFSI_anion_adduct_TFSI_anion_TFSI_anion_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  },
+  "High Voltage Cathode System": {
+    "success": true,
+    "execution_time": 0.013527631759643555,
+    "network": {
+      "total_molecules": 5,
+      "total_reactions": 9,
+      "generations": 2,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 3,
+          "generated_reactions": 2,
+          "feasible_reactions": 2,
+          "new_molecules": 2,
+          "total_molecules": 5,
+          "total_reactions": 2,
+          "time": 0.004148721694946289
+        },
+        {
+          "generation": 1,
+          "input_molecules": 2,
+          "generated_reactions": 7,
+          "feasible_reactions": 7,
+          "new_molecules": 0,
+          "total_molecules": 5,
+          "total_reactions": 9,
+          "time": 0.008428335189819336
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "Li_ion",
+            "smiles": "[Li+]"
+          },
+          {
+            "name": "PF6_anion",
+            "smiles": "F[P-](F)(F)(F)(F)F"
+          },
+          {
+            "name": "EMC",
+            "smiles": "CCOC(=O)OC"
+          }
+        ],
+        "1": [
+          {
+            "name": "Li_ion_oxidized",
+            "smiles": "O"
+          },
+          {
+            "name": "EMC_EMC_adduct",
+            "smiles": "CO"
+          }
+        ]
+      },
+      "reaction_types": {
+        "oxidation": 3,
+        "nucleophilic": 3,
+        "acid": 3
+      },
+      "reactions": [
+        {
+          "name": "oxidation_Li_ion",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_oxidized",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "nucleophilic_addition_EMC_EMC",
+          "reactants": [
+            {
+              "name": "EMC",
+              "smiles": "CCOC(=O)OC"
+            },
+            {
+              "name": "EMC",
+              "smiles": "CCOC(=O)OC"
+            }
+          ],
+          "products": [
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "oxidation_Li_ion_oxidized",
+          "reactants": [
+            {
+              "name": "Li_ion_oxidized",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_oxidized_oxidized",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "oxidation_EMC_EMC_adduct",
+          "reactants": [
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EMC_EMC_adduct_oxidized",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "acid_base_Li_ion_oxidized_Li_ion_oxidized",
+          "reactants": [
+            {
+              "name": "Li_ion_oxidized",
+              "smiles": "O"
+            },
+            {
+              "name": "Li_ion_oxidized",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_oxidized_Li_ion_oxidized_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "acid_base_Li_ion_oxidized_EMC_EMC_adduct",
+          "reactants": [
+            {
+              "name": "Li_ion_oxidized",
+              "smiles": "O"
+            },
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_oxidized_EMC_EMC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_Li_ion_oxidized_EMC_EMC_adduct",
+          "reactants": [
+            {
+              "name": "Li_ion_oxidized",
+              "smiles": "O"
+            },
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_oxidized_EMC_EMC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EMC_EMC_adduct_EMC_EMC_adduct",
+          "reactants": [
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EMC_EMC_adduct_EMC_EMC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EMC_EMC_adduct_EMC_EMC_adduct",
+          "reactants": [
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "EMC_EMC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EMC_EMC_adduct_EMC_EMC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  },
+  "Additive System (VC/FEC)": {
+    "success": true,
+    "execution_time": 0.03032541275024414,
+    "network": {
+      "total_molecules": 6,
+      "total_reactions": 10,
+      "generations": 3,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 3,
+          "generated_reactions": 7,
+          "feasible_reactions": 7,
+          "new_molecules": 2,
+          "total_molecules": 5,
+          "total_reactions": 7,
+          "time": 0.011397838592529297
+        },
+        {
+          "generation": 1,
+          "input_molecules": 2,
+          "generated_reactions": 2,
+          "feasible_reactions": 2,
+          "new_molecules": 1,
+          "total_molecules": 6,
+          "total_reactions": 9,
+          "time": 0.009840726852416992
+        },
+        {
+          "generation": 2,
+          "input_molecules": 1,
+          "generated_reactions": 1,
+          "feasible_reactions": 1,
+          "new_molecules": 0,
+          "total_molecules": 6,
+          "total_reactions": 10,
+          "time": 0.00793766975402832
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "Li_ion",
+            "smiles": "[Li+]"
+          },
+          {
+            "name": "VC",
+            "smiles": "O=c1occo1"
+          },
+          {
+            "name": "FEC",
+            "smiles": "O=C1OCC(F)O1"
+          }
+        ],
+        "1": [
+          {
+            "name": "VC_opened",
+            "smiles": "CC"
+          },
+          {
+            "name": "VC_VC_adduct",
+            "smiles": "CO"
+          }
+        ],
+        "2": [
+          {
+            "name": "VC_VC_adduct_VC_VC_adduct_salt",
+            "smiles": "O"
+          }
+        ]
+      },
+      "reaction_types": {
+        "ring": 2,
+        "coordination": 2,
+        "nucleophilic": 4,
+        "acid": 2
+      },
+      "reactions": [
+        {
+          "name": "ring_opening_VC",
+          "reactants": [
+            {
+              "name": "VC",
+              "smiles": "O=c1occo1"
+            }
+          ],
+          "products": [
+            {
+              "name": "VC_opened",
+              "smiles": "CC"
+            }
+          ],
+          "activation_energy": 45.0
+        },
+        {
+          "name": "ring_opening_FEC",
+          "reactants": [
+            {
+              "name": "FEC",
+              "smiles": "O=C1OCC(F)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "FEC_opened",
+              "smiles": "CC"
+            }
+          ],
+          "activation_energy": 45.0
+        },
+        {
+          "name": "coordination_Li_ion_VC",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "VC",
+              "smiles": "O=c1occo1"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_VC_complex",
+              "smiles": "O=c1occo1"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "coordination_Li_ion_FEC",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "FEC",
+              "smiles": "O=C1OCC(F)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_FEC_complex",
+              "smiles": "O=C1OCC(F)O1"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "nucleophilic_addition_VC_VC",
+          "reactants": [
+            {
+              "name": "VC",
+              "smiles": "O=c1occo1"
+            },
+            {
+              "name": "VC",
+              "smiles": "O=c1occo1"
+            }
+          ],
+          "products": [
+            {
+              "name": "VC_VC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "nucleophilic_addition_VC_FEC",
+          "reactants": [
+            {
+              "name": "VC",
+              "smiles": "O=c1occo1"
+            },
+            {
+              "name": "FEC",
+              "smiles": "O=C1OCC(F)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "VC_FEC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "nucleophilic_addition_FEC_FEC",
+          "reactants": [
+            {
+              "name": "FEC",
+              "smiles": "O=C1OCC(F)O1"
+            },
+            {
+              "name": "FEC",
+              "smiles": "O=C1OCC(F)O1"
+            }
+          ],
+          "products": [
+            {
+              "name": "FEC_FEC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_VC_VC_adduct_VC_VC_adduct",
+          "reactants": [
+            {
+              "name": "VC_VC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "VC_VC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "VC_VC_adduct_VC_VC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_VC_VC_adduct_VC_VC_adduct",
+          "reactants": [
+            {
+              "name": "VC_VC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "VC_VC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "VC_VC_adduct_VC_VC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_VC_VC_adduct_VC_VC_adduct_salt_VC_VC_adduct_VC_VC_adduct_salt",
+          "reactants": [
+            {
+              "name": "VC_VC_adduct_VC_VC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "VC_VC_adduct_VC_VC_adduct_salt",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "VC_VC_adduct_VC_VC_adduct_salt_VC_VC_adduct_VC_VC_adduct_salt_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  },
+  "Arbitrary Organic Molecules": {
+    "success": true,
+    "execution_time": 0.050208330154418945,
+    "network": {
+      "total_molecules": 7,
+      "total_reactions": 24,
+      "generations": 2,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 3,
+          "generated_reactions": 11,
+          "feasible_reactions": 11,
+          "new_molecules": 4,
+          "total_molecules": 7,
+          "total_reactions": 11,
+          "time": 0.010585784912109375
+        },
+        {
+          "generation": 1,
+          "input_molecules": 4,
+          "generated_reactions": 13,
+          "feasible_reactions": 13,
+          "new_molecules": 0,
+          "total_molecules": 7,
+          "total_reactions": 24,
+          "time": 0.035674095153808594
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "ethanol",
+            "smiles": "CCO"
+          },
+          {
+            "name": "acetic_acid",
+            "smiles": "CC(=O)O"
+          },
+          {
+            "name": "cyclohexane",
+            "smiles": "C1CCCCC1"
+          }
+        ],
+        "1": [
+          {
+            "name": "ethanol_frag1",
+            "smiles": "C"
+          },
+          {
+            "name": "ethanol_frag2",
+            "smiles": "O"
+          },
+          {
+            "name": "cyclohexane_opened",
+            "smiles": "CC"
+          },
+          {
+            "name": "ethanol_ethanol_adduct",
+            "smiles": "CO"
+          }
+        ]
+      },
+      "reaction_types": {
+        "bond": 8,
+        "ring": 1,
+        "acid": 6,
+        "nucleophilic": 5,
+        "reduction": 4
+      },
+      "reactions": [
+        {
+          "name": "bond_breaking_ethanol",
+          "reactants": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ethanol",
+          "reactants": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_acetic_acid",
+          "reactants": [
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            }
+          ],
+          "products": [
+            {
+              "name": "acetic_acid_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "acetic_acid_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_acetic_acid",
+          "reactants": [
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            }
+          ],
+          "products": [
+            {
+              "name": "acetic_acid_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "acetic_acid_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "ring_opening_cyclohexane",
+          "reactants": [
+            {
+              "name": "cyclohexane",
+              "smiles": "C1CCCCC1"
+            }
+          ],
+          "products": [
+            {
+              "name": "cyclohexane_opened",
+              "smiles": "CC"
+            }
+          ],
+          "activation_energy": 50.0
+        },
+        {
+          "name": "acid_base_ethanol_ethanol",
+          "reactants": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            },
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_ethanol_ethanol",
+          "reactants": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            },
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_ethanol_acetic_acid",
+          "reactants": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            },
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_acetic_acid_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_ethanol_acetic_acid",
+          "reactants": [
+            {
+              "name": "ethanol",
+              "smiles": "CCO"
+            },
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_acetic_acid_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_acetic_acid_acetic_acid",
+          "reactants": [
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            },
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            }
+          ],
+          "products": [
+            {
+              "name": "acetic_acid_acetic_acid_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_acetic_acid_acetic_acid",
+          "reactants": [
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            },
+            {
+              "name": "acetic_acid",
+              "smiles": "CC(=O)O"
+            }
+          ],
+          "products": [
+            {
+              "name": "acetic_acid_acetic_acid_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "reduction_ethanol_frag1",
+          "reactants": [
+            {
+              "name": "ethanol_frag1",
+              "smiles": "C"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag1_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "bond_breaking_ethanol_frag2",
+          "reactants": [
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ethanol_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ethanol_frag2",
+          "reactants": [
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ethanol_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_ethanol_frag2",
+          "reactants": [
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag2_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "reduction_cyclohexane_opened",
+          "reactants": [
+            {
+              "name": "cyclohexane_opened",
+              "smiles": "CC"
+            }
+          ],
+          "products": [
+            {
+              "name": "cyclohexane_opened_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "bond_breaking_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ethanol_ethanol_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "ethanol_ethanol_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_adduct_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "acid_base_ethanol_frag2_ethanol_frag2",
+          "reactants": [
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag2_ethanol_frag2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "acid_base_ethanol_frag2_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag2_ethanol_ethanol_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_ethanol_frag2_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_frag2_ethanol_ethanol_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_ethanol_ethanol_adduct_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_adduct_ethanol_ethanol_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_ethanol_ethanol_adduct_ethanol_ethanol_adduct",
+          "reactants": [
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "ethanol_ethanol_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "ethanol_ethanol_adduct_ethanol_ethanol_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  },
+  "Mixed Metal System": {
+    "success": true,
+    "execution_time": 0.061043500900268555,
+    "network": {
+      "total_molecules": 9,
+      "total_reactions": 29,
+      "generations": 2,
+      "generation_stats": [
+        {
+          "generation": 0,
+          "input_molecules": 4,
+          "generated_reactions": 11,
+          "feasible_reactions": 11,
+          "new_molecules": 5,
+          "total_molecules": 9,
+          "total_reactions": 11,
+          "time": 0.013140201568603516
+        },
+        {
+          "generation": 1,
+          "input_molecules": 5,
+          "generated_reactions": 18,
+          "feasible_reactions": 18,
+          "new_molecules": 0,
+          "total_molecules": 9,
+          "total_reactions": 29,
+          "time": 0.0469822883605957
+        }
+      ],
+      "molecules_by_generation": {
+        "0": [
+          {
+            "name": "Li_ion",
+            "smiles": "[Li+]"
+          },
+          {
+            "name": "Na_ion",
+            "smiles": "[Na+]"
+          },
+          {
+            "name": "Mg_ion",
+            "smiles": "[Mg+2]"
+          },
+          {
+            "name": "EC",
+            "smiles": "O=C1OCCO1"
+          }
+        ],
+        "1": [
+          {
+            "name": "Li_ion_reduced",
+            "smiles": "C"
+          },
+          {
+            "name": "EC_frag2",
+            "smiles": "O"
+          },
+          {
+            "name": "EC_ethylene",
+            "smiles": "C=C"
+          },
+          {
+            "name": "EC_CO2",
+            "smiles": "O=C=O"
+          },
+          {
+            "name": "EC_EC_adduct",
+            "smiles": "CO"
+          }
+        ]
+      },
+      "reaction_types": {
+        "reduction": 7,
+        "bond": 7,
+        "ring": 1,
+        "coordination": 3,
+        "nucleophilic": 6,
+        "acid": 5
+      },
+      "reactions": [
+        {
+          "name": "reduction_Li_ion",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "reduction_Na_ion",
+          "reactants": [
+            {
+              "name": "Na_ion",
+              "smiles": "[Na+]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Na_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "reduction_Mg_ion",
+          "reactants": [
+            {
+              "name": "Mg_ion",
+              "smiles": "[Mg+2]"
+            }
+          ],
+          "products": [
+            {
+              "name": "Mg_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 0
+        },
+        {
+          "name": "bond_breaking_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "bond_breaking_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "bond_breaking_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 66.4
+        },
+        {
+          "name": "ring_opening_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_ethylene",
+              "smiles": "C=C"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "activation_energy": 45.0
+        },
+        {
+          "name": "coordination_Li_ion_EC",
+          "reactants": [
+            {
+              "name": "Li_ion",
+              "smiles": "[Li+]"
+            },
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_EC_complex",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "coordination_Na_ion_EC",
+          "reactants": [
+            {
+              "name": "Na_ion",
+              "smiles": "[Na+]"
+            },
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "Na_ion_EC_complex",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "coordination_Mg_ion_EC",
+          "reactants": [
+            {
+              "name": "Mg_ion",
+              "smiles": "[Mg+2]"
+            },
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "Mg_ion_EC_complex",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "activation_energy": 15.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_EC",
+          "reactants": [
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            },
+            {
+              "name": "EC",
+              "smiles": "O=C1OCCO1"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "reduction_Li_ion_reduced",
+          "reactants": [
+            {
+              "name": "Li_ion_reduced",
+              "smiles": "C"
+            }
+          ],
+          "products": [
+            {
+              "name": "Li_ion_reduced_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "bond_breaking_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_frag2_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "reduction_EC_ethylene",
+          "reactants": [
+            {
+              "name": "EC_ethylene",
+              "smiles": "C=C"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_ethylene_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 15.999999999999996
+        },
+        {
+          "name": "bond_breaking_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_EC_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "bond_breaking_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_frag1",
+              "smiles": "C"
+            },
+            {
+              "name": "EC_EC_adduct_frag2",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 56.0
+        },
+        {
+          "name": "reduction_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_reduced",
+              "smiles": "C"
+            }
+          ],
+          "activation_energy": 18.000000000000007
+        },
+        {
+          "name": "acid_base_EC_frag2_EC_frag2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_frag2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "acid_base_EC_frag2_EC_CO2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_CO2_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_frag2_EC_CO2",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_CO2_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EC_frag2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_EC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_frag2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_frag2",
+              "smiles": "O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_frag2_EC_EC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_CO2_EC_CO2",
+          "reactants": [
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            },
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_CO2_EC_CO2_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EC_CO2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_CO2_EC_EC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_CO2_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_CO2",
+              "smiles": "O=C=O"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_CO2_EC_EC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        },
+        {
+          "name": "acid_base_EC_EC_adduct_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_EC_EC_adduct_salt",
+              "smiles": "O"
+            },
+            {
+              "name": "water",
+              "smiles": "O"
+            }
+          ],
+          "activation_energy": 10.0
+        },
+        {
+          "name": "nucleophilic_addition_EC_EC_adduct_EC_EC_adduct",
+          "reactants": [
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            },
+            {
+              "name": "EC_EC_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "products": [
+            {
+              "name": "EC_EC_adduct_EC_EC_adduct_adduct",
+              "smiles": "CO"
+            }
+          ],
+          "activation_energy": 25.0
+        }
+      ]
+    },
+    "message": "Universal network generation completed successfully"
+  }
+}

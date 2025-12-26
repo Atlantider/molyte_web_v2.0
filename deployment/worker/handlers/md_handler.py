@@ -1,275 +1,180 @@
-"""
-MD 任务处理器
-
-处理分子动力学模拟任务
-"""
-import logging
-import time
-from typing import Dict, Any, List, Optional
 from pathlib import Path
-
-from worker.handlers.base import BaseHandler
-
-
-logger = logging.getLogger(__name__)
-
+from typing import Dict, List, Tuple
+import time
+import shutil
+import subprocess
+from .base_handler import BaseHandler
 
 class MDHandler(BaseHandler):
-    """MD 任务处理器"""
-    
-    JOB_TYPE = "MD"
-    
-    def process(self, job: Dict[str, Any]) -> bool:
-        """
-        处理 MD 任务
-        
-        Args:
-            job: 任务信息
-            
-        Returns:
-            是否成功开始处理
-        """
+    """Handler for MD and RESP tasks"""
+
+    def handle_job(self, job: Dict) -> None:
         job_id = job['id']
-        self.logger.info(f"开始处理 MD 任务 {job_id}")
+        self.logger.info(f"Start processing MD Job {job_id}")
         
         try:
-            # 更新状态为 QUEUED
-            self.update_status(job_id, 'QUEUED')
+            self.update_status(job_id, 'QUEUED', 'md')
             
-            # 获取任务配置
-            job_data = job.get('config', {})
-            charge_method = job_data.get('charge_method', 'ligpargen')
+            # Late imports to avoid circular dependency issues if any
+            from app.workers.molyte_wrapper import MolyteWrapper
+            from app.workers.resp_calculator import RESPCalculator
             
-            # 初始化 MolyteWrapper
-            wrapper = self._init_molyte_wrapper()
+            wrapper = MolyteWrapper(
+                work_base_path=Path(self.config['local']['work_base_path']),
+                initial_salts_path=Path(self.config['local']['initial_salts_path']),
+                ligpargen_path=Path(self.config['local']['ligpargen_path']),
+                packmol_path=Path(self.config['local']['packmol_path']),
+                ltemplify_path=Path(self.config['local']['ltemplify_path']),
+                moltemplate_path=Path(self.config['local']['moltemplate_path']),
+                charge_save_path=Path(self.config['local']['charge_save_path']),
+            )
             
-            # 检查是否需要 RESP 计算
-            if charge_method == 'resp':
-                solvents = job_data.get('solvents', [])
+            job_data = job['config']
+            charge_method = job_data.get("charge_method", "ligpargen")
+            
+            if charge_method == "resp":
+                solvents = job_data.get("solvents", [])
                 solvents_needing_resp = wrapper.get_solvents_needing_resp(solvents)
                 
                 if solvents_needing_resp:
-                    self.logger.info(
-                        f"MD 任务 {job_id} 需要 RESP 计算: "
-                        f"{[s['name'] for s in solvents_needing_resp]}"
-                    )
-                    return self._start_resp_calculations(
-                        job_id, job, solvents_needing_resp, wrapper
-                    )
-            
-            # 直接生成 LAMMPS 输入文件
-            return self._continue_md_job(job_id, job, wrapper)
-            
+                    self.logger.info(f"MD Job {job_id} requires RESP: {[s['name'] for s in solvents_needing_resp]}")
+                    self._start_resp_calculations(job_id, job, solvents_needing_resp, wrapper)
+                    return
+
+            self._continue_md_job(job_id, job, wrapper)
+
         except Exception as e:
-            self.handle_error(job_id, e)
-            return False
-    
-    def handle_completion(
-        self,
-        job_id: int,
-        job_info: Dict[str, Any],
-        slurm_status: str
-    ):
-        """
-        处理 MD 任务完成
+            self.logger.error(f"MD Job {job_id} failed: {e}", exc_info=True)
+            self.update_status(job_id, 'FAILED', 'md', error_message=str(e))
+
+    def _start_resp_calculations(self, job_id, job, solvents, wrapper):
+        from app.workers.resp_calculator import RESPCalculator
         
-        Args:
-            job_id: 任务 ID
-            job_info: 任务信息
-            slurm_status: Slurm 状态
-        """
-        work_dir = Path(job_info.get('work_dir', ''))
-        slurm_job_id = job_info.get('slurm_job_id')
-        
-        self.logger.info(f"MD 任务 {job_id} Slurm 状态: {slurm_status}")
-        
-        if slurm_status == 'COMPLETED':
-            try:
-                # 检查 LAMMPS 输出
-                if self._check_lammps_success(work_dir):
-                    # 获取 CPU 核时
-                    from worker.utils.slurm import SlurmManager
-                    slurm = SlurmManager()
-                    cpu_hours = slurm.get_job_cpu_hours(slurm_job_id)
-                    
-                    # 上传结果到 COS
-                    from worker.uploaders import ResultUploader
-                    uploader = ResultUploader(self.config)
-                    uploader.upload_md_results(job_id, work_dir)
-                    
-                    # 触发后处理
-                    self.client.trigger_postprocess(job_id)
-                    
-                    # 标记完成
-                    self.mark_completed(job_id, cpu_hours=cpu_hours)
-                else:
-                    self.update_status(
-                        job_id, 'FAILED',
-                        error_message="LAMMPS simulation failed"
-                    )
-                    self.job_tracker.remove_job(job_id)
-                    
-            except Exception as e:
-                self.handle_error(job_id, e)
-        
-        elif slurm_status in ['FAILED', 'TIMEOUT', 'CANCELLED']:
-            self.update_status(
-                job_id, 'FAILED',
-                error_message=f"Slurm job {slurm_status}"
-            )
-            self.job_tracker.remove_job(job_id)
-    
-    # ==================== RESP 相关 ====================
-    
-    def _start_resp_calculations(
-        self,
-        job_id: int,
-        job: Dict,
-        solvents: List[Dict],
-        wrapper
-    ) -> bool:
-        """启动 RESP 电荷计算"""
         try:
-            # 创建 RESP 工作目录
-            job_name = job.get('config', {}).get('name', f'MD-{job_id}')
-            resp_base_dir = self.config.work_base_path / f"RESP_{job_name}"
+            resp_base_dir = Path(self.config['local']['work_base_path']) / f"RESP_{job['config'].get('name', job_id)}"
             resp_base_dir.mkdir(parents=True, exist_ok=True)
             
-            # 获取 Slurm 配置
             md_config = job.get('config', {})
-            slurm_partition = md_config.get(
-                'slurm_partition',
-                self.config.default_partition
-            )
+            slurm_partition = md_config.get('slurm_partition', self.config.get('slurm', {}).get('partition', 'cpu'))
             
-            # 初始化 RESP 计算器
-            from app.workers.resp_calculator import RESPCalculator
             resp_calculator = RESPCalculator(
-                charge_save_path=self.config.work_base_path / 'charges',
+                charge_save_path=Path(self.config['local']['charge_save_path']),
                 slurm_partition=slurm_partition
             )
             
             resp_jobs = []
-            
             for solvent in solvents:
                 name = solvent['name']
                 smiles = solvent.get('smiles', '')
+                if not smiles: continue
                 
-                if not smiles:
-                    self.logger.warning(f"No SMILES for solvent {name}, skipping RESP")
-                    continue
-                
-                # 为每个溶剂创建工作目录
                 solvent_dir = resp_base_dir / name
                 solvent_dir.mkdir(parents=True, exist_ok=True)
                 
-                # 启动 RESP 计算
-                resp_result = resp_calculator.calculate(
+                # Run LigParGen
+                ligpargen_path = self.config['local']['ligpargen_path']
+                cmd = f"{ligpargen_path}/ligpargen -s '{smiles}' -n {name} -r MOL -c 0 -o 0 -cgen CM1A"
+                res = subprocess.run(cmd, shell=True, cwd=str(solvent_dir), capture_output=True, text=True)
+                if res.returncode != 0:
+                    self.logger.error(f"LigParGen failed for {name}: {res.stderr}")
+                    continue
+                    
+                pdb_file = f"{name}.charmm.pdb"
+                script_path = resp_calculator.generate_resp_slurm_script(
+                    work_dir=solvent_dir,
+                    pdb_file=pdb_file,
                     molecule_name=name,
-                    smiles=smiles,
-                    work_dir=solvent_dir
+                    charge=0,
+                    spin_multiplicity=1,
+                    solvent="water",
+                    cpus=16,
+                    time_limit_hours=24
                 )
                 
-                resp_jobs.append({
-                    'name': name,
-                    'slurm_job_id': resp_result.get('slurm_job_id'),
-                    'work_dir': str(solvent_dir)
-                })
+                success, slurm_id, err = resp_calculator.submit_resp_job(solvent_dir, script_path)
+                if success:
+                    resp_jobs.append({
+                        'molecule_name': name,
+                        'slurm_job_id': slurm_id,
+                        'work_dir': str(solvent_dir),
+                        'status': 'RUNNING',
+                        'cpu_hours': 0.0
+                    })
             
-            # 保存 RESP 任务信息
-            self.job_tracker.add_job(
-                job_id=job_id,
-                job_type='MD',
-                extra_info={
-                    'phase': 'resp',
+            if resp_jobs:
+                self.worker.running_jobs[job_id] = {
+                    'type': 'md_waiting_resp',
+                    'job': job,
+                    'wrapper': wrapper,
                     'resp_jobs': resp_jobs,
-                    'original_job': job
+                    'resp_base_dir': str(resp_base_dir),
+                    'start_time': time.time()
                 }
-            )
-            
-            return True
-            
+                self.logger.info(f"MD Job {job_id} waiting for {len(resp_jobs)} RESP jobs")
+            else:
+                self.logger.warning(f"No RESP jobs started for {job_id}, falling back")
+                job['config']['charge_method'] = 'ligpargen'
+                self._continue_md_job(job_id, job, wrapper)
+                
         except Exception as e:
-            self.logger.error(f"启动 RESP 失败: {e}", exc_info=True)
-            self.handle_error(job_id, e)
-            return False
-    
-    def _continue_md_job(
-        self,
-        job_id: int,
-        job: Dict,
-        wrapper
-    ) -> bool:
-        """继续 MD 任务（RESP 完成后或不需要 RESP）"""
+            self.logger.error(f"Failed to start RESP: {e}")
+            self.update_status(job_id, 'FAILED', 'md', error_message=f"RESP failed: {e}")
+
+    def _continue_md_job(self, job_id, job, wrapper):
         try:
-            job_data = job.get('config', {})
-            job_name = job_data.get('name', f'MD-{job_id}')
+            job_data = job['config']
+            result = wrapper.generate_lammps_input(job_data)
+            if not result['success']:
+                raise Exception(result.get('error', 'Unknown error'))
             
-            # 生成 LAMMPS 输入文件
-            work_dir = wrapper.prepare_lammps_input(
-                job_id=job_id,
-                job_name=job_name,
-                cations=job_data.get('cations', []),
-                anions=job_data.get('anions', []),
-                solvents=job_data.get('solvents', []),
-                additives=job_data.get('additives', []),
-                box_size=job_data.get('box_size', 50),
-                temperature=job_data.get('temperature', 298.15),
-                pressure=job_data.get('pressure', 1.0),
-                slurm_config=job_data
-            )
+            work_dir = result['work_dir']
+            slurm_res = wrapper.submit_to_slurm(work_dir)
+            if not slurm_res['success']:
+                 raise Exception(slurm_res.get('error'))
             
-            # 提交到 Slurm
-            from worker.utils.slurm import SlurmManager
-            slurm = SlurmManager()
-            slurm_result = slurm.submit_job(work_dir)
+            slurm_job_id = slurm_res['slurm_job_id']
             
-            if not slurm_result['success']:
-                raise Exception(slurm_result.get('error', 'Failed to submit'))
+            resp_cpu = 0.0
+            if job_id in self.worker.running_jobs:
+                 resp_cpu = self.worker.running_jobs[job_id].get('total_resp_cpu_hours', 0.0)
             
-            slurm_job_id = slurm_result['slurm_job_id']
+            self.update_status(job_id, 'RUNNING', 'md', slurm_job_id=slurm_job_id, work_dir=str(work_dir))
             
-            # 标记为运行中
-            self.mark_running(
-                job_id,
-                slurm_job_id=slurm_job_id,
-                work_dir=str(work_dir)
-            )
-            
-            self.logger.info(f"MD 任务 {job_id} 已提交 (Slurm: {slurm_job_id})")
-            return True
-            
+            self.worker.running_jobs[job_id] = {
+                'type': 'md',
+                'slurm_job_id': slurm_job_id,
+                'work_dir': work_dir,
+                'start_time': time.time(),
+                'resp_cpu_hours': resp_cpu
+            }
         except Exception as e:
-            self.handle_error(job_id, e)
-            return False
+            self.logger.error(f"MD Continuation failed: {e}")
+            self.update_status(job_id, 'FAILED', 'md', error_message=str(e))
     
-    # ==================== 辅助方法 ====================
-    
-    def _init_molyte_wrapper(self):
-        """初始化 MolyteWrapper"""
-        from app.workers.molyte_wrapper import MolyteWrapper
+    def check_resp_jobs(self, job_id, job_info) -> Tuple[bool, bool]:
+        from app.workers.resp_calculator import RESPCalculator
+        resp_calc = RESPCalculator(charge_save_path=Path(self.config['local']['charge_save_path']))
         
-        local_config = self.config.get('local', {})
+        all_completed = True
+        any_failed = False
+        total_cpu = 0.0
         
-        return MolyteWrapper(
-            work_base_path=Path(local_config.get('work_base_path', '/tmp')),
-            initial_salts_path=Path(local_config.get('initial_salts_path', '')),
-            ligpargen_path=Path(local_config.get('ligpargen_path', '')),
-            packmol_path=Path(local_config.get('packmol_path', '')),
-            ltemplify_path=Path(local_config.get('ltemplify_path', '')),
-            moltemplate_path=Path(local_config.get('moltemplate_path', '')),
-            charge_save_path=Path(local_config.get('charge_save_path', '')),
-        )
-    
-    def _check_lammps_success(self, work_dir: Path) -> bool:
-        """检查 LAMMPS 是否成功完成"""
-        log_file = work_dir / 'log.lammps'
+        for rjob in job_info['resp_jobs']:
+            if rjob['status'] in ['COMPLETED', 'FAILED']:
+                total_cpu += rjob.get('cpu_hours', 0.0)
+                if rjob['status'] == 'FAILED': any_failed = True
+                continue
+            
+            status = resp_calc.check_job_status(rjob['slurm_job_id'])
+            if status in ['PENDING', 'RUNNING']:
+                all_completed = False
+            elif status == 'COMPLETED':
+                rjob['status'] = 'COMPLETED'
+                rjob['cpu_hours'] = resp_calc.get_job_cpu_hours(rjob['slurm_job_id'])
+                total_cpu += rjob['cpu_hours']
+            else:
+                rjob['status'] = 'FAILED'
+                any_failed = True
         
-        if not log_file.exists():
-            return False
-        
-        with open(log_file, 'r') as f:
-            content = f.read()
-        
-        # 检查是否有 "Total wall time" 表示正常完成
-        return 'Total wall time' in content
+        job_info['total_resp_cpu_hours'] = total_cpu
+        return all_completed, any_failed

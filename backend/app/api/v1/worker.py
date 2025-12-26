@@ -607,6 +607,54 @@ async def get_pending_jobs(
             for job in filtered_jobs
         ]
 
+    elif job_type == "REACTION_NETWORK":
+        # 获取 CREATED 或 SUBMITTED 状态的反应网络任务
+        from app.models.reaction_network import ReactionNetworkJob, ReactionNetworkJobStatus
+
+        jobs = db.query(ReactionNetworkJob).filter(
+            ReactionNetworkJob.status.in_([
+                ReactionNetworkJobStatus.CREATED,
+                ReactionNetworkJobStatus.QUEUED
+            ])
+        ).order_by(ReactionNetworkJob.created_at).limit(limit).all()
+
+        # 根据worker支持的分区过滤任务
+        filtered_jobs = []
+        for job in jobs:
+            job_partition = job.slurm_partition or "cpu"
+
+            # 如果没有指定worker或worker支持该分区，则包含此任务
+            if not supported_partitions or job_partition in supported_partitions:
+                filtered_jobs.append(job)
+            else:
+                logger.debug(f"Skipping REACTION_NETWORK job {job.id} with partition {job_partition} for worker {worker_name}")
+
+        logger.info(f"Filtered {len(filtered_jobs)} REACTION_NETWORK jobs from {len(jobs)} total jobs for worker {worker_name}")
+
+        return [
+            PendingJobResponse(
+                id=job.id,
+                type="REACTION_NETWORK",
+                config={
+                    "job_name": job.job_name,
+                    "description": job.description,
+                    "initial_smiles": job.initial_smiles,
+                    "temperature": job.temperature,
+                    "electrode_type": job.electrode_type,
+                    "voltage": job.voltage,
+                    "max_generations": job.max_generations,
+                    "max_species": job.max_species,
+                    "energy_cutoff": job.energy_cutoff,
+                    "slurm_partition": job.slurm_partition,
+                    "slurm_cpus": job.slurm_cpus,
+                    "slurm_time": job.slurm_time,
+                    **(job.config or {}),
+                },
+                created_at=job.created_at
+            )
+            for job in filtered_jobs
+        ]
+
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -708,6 +756,9 @@ async def update_job_status(
     elif job_type == "CLUSTER_ANALYSIS":
         from app.models.job import AdvancedClusterJobStatus
         valid_statuses = [s.value for s in AdvancedClusterJobStatus]
+    elif job_type == "REACTION_NETWORK":
+        from app.models.reaction_network import ReactionNetworkJob, ReactionNetworkJobStatus
+        valid_statuses = [s.value for s in ReactionNetworkJobStatus]
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1358,6 +1409,67 @@ async def get_job_input_data(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid job type: {job_type}"
         )
+
+    elif job_type == "REACTION_NETWORK":
+        from app.models.reaction_network import ReactionNetworkJob, ReactionNetworkJobStatus
+        
+        job = db.query(ReactionNetworkJob).filter(ReactionNetworkJob.id == job_id).first()
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Reaction Network Job {job_id} not found"
+            )
+            
+        # 更新状态
+        try:
+            job.status = ReactionNetworkJobStatus(mapped_status)
+        except ValueError:
+            pass
+            
+        if status_update.slurm_job_id:
+            job.slurm_job_id = status_update.slurm_job_id
+            
+        if status_update.work_dir:
+            job.work_dir = status_update.work_dir
+            
+        if status_update.error_message:
+            job.error_message = status_update.error_message
+            
+        if status_update.progress is not None:
+            job.progress = status_update.progress
+            
+        if mapped_status == "RUNNING" and not job.started_at:
+            job.started_at = datetime.now()
+            
+        if mapped_status in ["COMPLETED", "FAILED"]:
+            job.finished_at = datetime.now()
+            if mapped_status == "COMPLETED":
+                job.progress = 1.0
+                
+        # 更新统计信息
+        if status_update.result:
+            if 'num_molecules' in status_update.result:
+                job.num_molecules = status_update.result['num_molecules']
+            if 'num_reactions' in status_update.result:
+                job.num_reactions = status_update.result['num_reactions']
+            if 'max_generation_reached' in status_update.result:
+                job.max_generation_reached = status_update.result['max_generation_reached']
+            if 'network_json_path' in status_update.result:
+                job.network_json_path = status_update.result['network_json_path']
+            if 'visualization_png_path' in status_update.result:
+                job.visualization_png_path = status_update.result['visualization_png_path']
+
+        if status_update.cpu_hours is not None:
+            job.actual_cpu_hours = status_update.cpu_hours
+            
+        db.commit()
+        
+        logger.info(
+            f"Reaction Network Job {job_id} status updated to {mapped_status} "
+            f"by worker {status_update.worker_name}"
+        )
+        
+        return {"status": "ok", "job_id": job_id, "new_status": mapped_status}
 
 
 # ==================== QC 结果上传 ====================

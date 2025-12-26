@@ -62,3 +62,4 @@ slurm-*.out
 secrets/
 *.pem
 *.key
+deployment/polling_worker_config_tencent.yaml

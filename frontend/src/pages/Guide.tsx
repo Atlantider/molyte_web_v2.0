@@ -51,6 +51,18 @@ export default function Guide() {
 
   return (
     <div className="guide-container">
+      {/* Background Elements from Home */}
+      <div className="guide-background">
+        <div className="bg-particles"></div>
+        <div className="bg-gradient"></div>
+        <div className="bg-grid"></div>
+        <div className="floating-shapes">
+          <div className="shape shape-1"></div>
+          <div className="shape shape-2"></div>
+          <div className="shape shape-3"></div>
+        </div>
+      </div>
+
       {/* Header */}
       <header className="guide-header">
         <div className="guide-header-content">
@@ -620,36 +632,34 @@ export default function Guide() {
               </Col>
               <Col xs={24} lg={12}>
                 <Card title="氧化还原电位与重组能 (Redox & Reorganization)" bordered={false} className="feature-item">
-                  <Row gutter={24} align="top">
-                    <Col span={24} style={{ marginBottom: 16 }}>
-                      <Paragraph>
-                        <Text strong>1. 氧化/还原电位 (Redox Potential)</Text>:
-                        <br />
-                        我们采用最高精度的 <Text strong>G4MP2</Text> 或 <Text strong>M06-2X</Text> 方法计算分子的绝热氧化/还原电位。
-                        <div className="formula-box" style={{ margin: '8px 0', fontSize: 13 }}>
-                          E_ox = (G(M⁺) - G(M)) / F - 1.4V
-                        </div>
-                        相比于简单的 HOMO/LUMO 能级，该方法考虑了溶剂化效应和构型弛豫，预测值与 CV 实验吻合度更高（误差 &lt; 0.2V）。
-                      </Paragraph>
-                      <Paragraph>
-                        <Text strong>2. 重组能 (Reorganization Energy, &lambda;)</Text>:
-                        <br />
-                        定义为电子转移过程中，分子因几何构型变化而消耗的能量。它是 <Text strong>Marcus 电子转移理论</Text> 的核心参数。
-                        <br />
-                        <ul>
-                          <li><Text strong>&lambda; 大 (如 EC, &gt;0.8 eV)</Text>: 结构变化剧烈，电子转移慢，阻抗高。</li>
-                          <li><Text strong>&lambda; 小 (如 芳香族分子, &lt;0.2 eV)</Text>: 结构刚性，电子转移极快，适合做添加剂或快充溶剂。</li>
-                        </ul>
-                      </Paragraph>
-                    </Col>
-                    <Col span={24} style={{ textAlign: 'center' }}>
-                      <Image
-                        src="/assets/redox_energy_diagram.png"
-                        alt="Marcus Theory Energy Diagram"
-                        style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '80%', maxHeight: 250 }}
-                      />
-                    </Col>
-                  </Row>
+                  <div style={{ marginBottom: 16, textAlign: 'center' }}>
+                    <Image
+                      src="/assets/redox_energy_diagram.png"
+                      alt="Marcus Theory Energy Diagram"
+                      style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '100%', maxHeight: 200, objectFit: 'contain' }}
+                    />
+                  </div>
+                  <div className="theory-card">
+                    <Paragraph>
+                      <Text strong>1. 氧化/还原电位 (Redox Potential)</Text>:
+                      <br />
+                      我们采用最高精度的 <Text strong>G4MP2</Text> 或 <Text strong>M06-2X</Text> 方法计算分子的绝热氧化/还原电位。
+                      <div className="formula-box" style={{ margin: '8px 0', fontSize: 13 }}>
+                        E_ox = (G(M⁺) - G(M)) / F - 1.4V
+                      </div>
+                      相比于简单的 HOMO/LUMO 能级，该方法考虑了溶剂化效应和构型弛豫，预测值与 CV 实验吻合度更高（误差 &lt; 0.2V）。
+                    </Paragraph>
+                    <Paragraph>
+                      <Text strong>2. 重组能 (Reorganization Energy, &lambda;)</Text>:
+                      <br />
+                      定义为电子转移过程中，分子因几何构型变化而消耗的能量。它是 <Text strong>Marcus 电子转移理论</Text> 的核心参数。
+                      <br />
+                      <ul>
+                        <li><Text strong>&lambda; 大 (如 EC, &gt;0.8 eV)</Text>: 结构变化剧烈，电子转移慢，阻抗高。</li>
+                        <li><Text strong>&lambda; 小 (如 芳香族分子, &lt;0.2 eV)</Text>: 结构刚性，电子转移极快，适合做添加剂或快充溶剂。</li>
+                      </ul>
+                    </Paragraph>
+                  </div>
                 </Card>
               </Col>
             </Row>
@@ -657,8 +667,8 @@ export default function Guide() {
         </section>
 
         {/* Footer */}
-        <footer className="guide-footer" style={{ textAlign: 'center', marginTop: 48, color: '#8c8c8c' }}>
-          Molyte Science Team &copy; 2025 | 基于第一性原理与数据驱动的材料研发
+        <footer className="guide-footer" style={{ textAlign: 'center', marginTop: 80, paddingBottom: 40 }}>
+          Molyte Team &copy; 2025
         </footer>
       </main>
     </div>

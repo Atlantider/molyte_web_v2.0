@@ -7862,15 +7862,13 @@ q
             return False
 
     def _convert_to_lammps_format(self, mol2_file: str, anion_name: str, coords_data: dict) -> tuple:
-        """
-        从mol2文件和Sobtop生成的力场参数生成 LAMMPS 格式和 PDB 文件
-
-        工作流程: 
-        1. 运行Sobtop从Hessian矩阵生成力场参数
-        2. 解析Sobtop生成的.itp文件获取力场参数
-        3. 生成标准moltemplate格式的.lt文件
-        4. 生成PDB文件
-        """
+        # 从mol2文件和Sobtop生成的力场参数生成 LAMMPS 格式和 PDB 文件
+        # 
+        # 工作流程: 
+        # 1. 运行Sobtop从Hessian矩阵生成力场参数
+        # 2. 解析Sobtop生成的.itp文件获取力场参数
+        # 3. 生成标准moltemplate格式的.lt文件
+        # 4. 生成PDB文件
         self.logger.info(f"转换 {anion_name} 为 LAMMPS 格式(使用Sobtop力场参数)")
 
         try:
@@ -7915,7 +7913,7 @@ q
 
     def _upload_anion_results(self, anion_job_id: int, anion_name: str, mol2_file: str,
                              gromacs_top: str, lt_file: str, pdb_file: str) -> bool:
-        """上传阴离子结果文件并复制到initial_salts目录, 然后注册到数据库"""
+        # 上传阴离子结果文件并复制到initial_salts目录, 然后注册到数据库
         self.logger.info(f"上传 {anion_name} 的结果文件")
 
         try:
@@ -7981,9 +7979,7 @@ q
             return False
 
     def _register_anion_in_database(self, anion_job_id: int, anion_name: str, lt_path: str, pdb_path: str) -> bool:
-        """
-        调用后端API注册阴离子到AnionLibrary数据库表
-        """
+        # 调用后端API注册阴离子到AnionLibrary数据库表
         try:
             endpoint = f"{self.api_base_url}/workers/anion_generation/{anion_job_id}/register"
             payload = {
@@ -8012,14 +8008,12 @@ q
             return False
 
     def _sync_anion_library_with_filesystem(self):
-        """
-        同步 initial_salts 文件夹和数据库中的阴离子库
-
-        功能: 
-        1. 扫描 initial_salts 文件夹中的所有 .lt 和 .pdb 文件
-        2. 删除数据库中存在但文件已被删除的阴离子记录
-        3. 添加文件夹中存在但数据库中没有的阴离子记录
-        """
+        # 同步 initial_salts 文件夹和数据库中的阴离子库
+        # 
+        # 功能: 
+        # 1. 扫描 initial_salts 文件夹中的所有 .lt 和 .pdb 文件
+        # 2. 删除数据库中存在但文件已被删除的阴离子记录
+        # 3. 添加文件夹中存在但数据库中没有的阴离子记录
         try:
             self.logger.info("=" * 80)
             self.logger.info("开始同步 initial_salts 文件夹和数据库...")
@@ -8107,9 +8101,7 @@ q
             self.logger.error(f"同步阴离子库异常: {e}", exc_info=True)
 
     def _delete_anion_from_database(self, anion_name: str) -> bool:
-        """
-        从数据库中删除阴离子记录(软删除)
-        """
+        # 从数据库中删除阴离子记录(软删除)
         try:
             endpoint = f"{self.api_base_url}/forcefield/anions/{anion_name}"
             response = requests.delete(
@@ -8129,9 +8121,7 @@ q
             return False
 
     def _add_anion_to_database(self, anion_name: str, lt_path: str, pdb_path: str) -> bool:
-        """
-        添加阴离子到数据库
-        """
+        # 添加阴离子到数据库
         try:
             endpoint = f"{self.api_base_url}/forcefield/anions/manual-register"
             payload = {
@@ -8161,9 +8151,7 @@ q
             return False
 
     def _refresh_frontend_ions_cache(self):
-        """
-        刷新前端离子缓存
-        """
+        # 刷新前端离子缓存
         try:
             endpoint = f"{self.api_base_url}/electrolytes/refresh-ions"
             response = requests.post(
@@ -8185,14 +8173,12 @@ q
             return False
 
     def _update_job_cpu_hours_api(self, job_id: int, job_type: str, cpu_hours: float):
-        """
-        通过API更新任务的CPU hours到数据库(实时追踪)
-        
-        Args:
-            job_id: 任务ID
-            job_type: 任务类型 ('qc', 'md', 'postprocess' 等)
-            cpu_hours: CPU核时数(小时)
-        """
+        # 通过API更新任务的CPU hours到数据库(实时追踪)
+        # 
+        # Args:
+        #     job_id: 任务ID
+        #     job_type: 任务类型 ('qc', 'md', 'postprocess' 等)
+        #     cpu_hours: CPU核时数(小时)
         try:
             # 根据任务类型构建API路径
             type_mapping = {
@@ -8220,7 +8206,7 @@ q
 
 
 def main():
-    """Main function"""
+    # Main function
     import argparse
 
     parser = argparse.ArgumentParser(description='混合云轮询 Worker')

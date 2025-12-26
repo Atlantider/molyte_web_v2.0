@@ -27,6 +27,10 @@ from app.models.compensation import (
 from app.models.organization_v2 import (
     MasterAccount, SubAccount
 )
+from app.models.reaction_network import (
+    ReactionNetworkJob, ReactionNetworkMolecule, ReactionNetworkReaction
+)
+
 
 __all__ = [
     "User",
@@ -81,4 +85,9 @@ __all__ = [
     # Master/Sub account models
     "MasterAccount",
     "SubAccount",
+    # Reaction network models
+    "ReactionNetworkJob",
+    "ReactionNetworkMolecule",
+    "ReactionNetworkReaction",
 ]
+

@@ -128,6 +128,11 @@ class User(Base):
     # Anion generation jobs
     anion_generation_jobs = relationship("AnionGenerationJob", back_populates="user", cascade="all, delete-orphan",
                                         foreign_keys="AnionGenerationJob.user_id")
+    
+    # Reaction network jobs
+    reaction_network_jobs = relationship("ReactionNetworkJob", back_populates="user", cascade="all, delete-orphan",
+                                        foreign_keys="ReactionNetworkJob.user_id")
+
 
     # 贡献统计和配额使用
     public_data_count = Column(Integer, default=0, nullable=False)  # 公开数据数量

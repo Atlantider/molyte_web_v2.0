@@ -205,3 +205,38 @@ export async function getNetworkVisualizationData(jobId: number, params?: {
     const response = await apiClient.get(`/reaction-network/jobs/${jobId}/network`, { params });
     return response.data;
 }
+
+/**
+ * 激活的算符信息
+ */
+export interface ActivatedOperator {
+    name: string;
+    description: string;
+    weight: number;
+    conditions: string[];
+    activation_reasons: string[];
+    required_drives: string[];
+    enhancing_drives: string[];
+    molecular_checks: string[];
+}
+
+export interface OperatorsResponse {
+    job_id: number;
+    num_operators: number;
+    operators: ActivatedOperator[];
+    environment: {
+        temperature: number;
+        voltage: number;
+        electrode_type: string;
+        active_drives: string[];
+    };
+}
+
+/**
+ * 获取激活的算符信息
+ */
+export async function getActivatedOperators(jobId: number): Promise<OperatorsResponse> {
+    const response = await apiClient.get(`/reaction-network/jobs/${jobId}/operators`);
+    return response.data;
+}
+

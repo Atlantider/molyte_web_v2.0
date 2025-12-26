@@ -150,6 +150,19 @@ const router = createBrowserRouter([
             path: 'ai-discovery',
             element: <AIDiscovery />,
           },
+          // 反应网络
+          {
+            path: 'reaction-network',
+            element: <ReactionNetworkJobs />,
+          },
+          {
+            path: 'reaction-network/create',
+            element: <ReactionNetworkCreate />,
+          },
+          {
+            path: 'reaction-network/:id',
+            element: <ReactionNetworkDetail />,
+          },
 
         ],
       },
@@ -203,6 +216,7 @@ const router = createBrowserRouter([
         element: <Research />,
       },
       // Admin routes
+
       {
         path: 'admin',
         element: <AdminDashboard />,

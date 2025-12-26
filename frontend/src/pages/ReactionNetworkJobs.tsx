@@ -143,7 +143,7 @@ const ReactionNetworkJobs: React.FC = () => {
             width: 200,
             fixed: 'left' as const,
             render: (text: string, record: ReactionNetworkJob) => (
-                <a onClick={() => navigate(`/reaction-network/${record.id}`)}>
+                <a onClick={() => navigate(`/workspace/liquid-electrolyte/reaction-network/${record.id}`)}>
                     <ExperimentOutlined style={{ marginRight: 8 }} />
                     {text}
                 </a>
@@ -231,7 +231,7 @@ const ReactionNetworkJobs: React.FC = () => {
                         type="link"
                         size="small"
                         icon={<EyeOutlined />}
-                        onClick={() => navigate(`/reaction-network/${record.id}`)}
+                        onClick={() => navigate(`/workspace/liquid-electrolyte/reaction-network/${record.id}`)}
                     >
                         查看
                     </Button>
@@ -317,7 +317,7 @@ const ReactionNetworkJobs: React.FC = () => {
                             <Button
                                 type="primary"
                                 icon={<PlusOutlined />}
-                                onClick={() => navigate('/reaction-network/create')}
+                                onClick={() => navigate('/workspace/liquid-electrolyte/reaction-network/create')}
                                 size="large"
                             >
                                 创建反应网络任务

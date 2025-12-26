@@ -413,3 +413,141 @@ def get_network_visualization_data(
         edges=edges,
         statistics=statistics
     )
+
+
+# ============================================================================
+# Operator Information
+# ============================================================================
+
+@router.get("/jobs/{job_id}/operators")
+def get_activated_operators(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """获取激活的算符信息
+    
+    返回基于任务配置激活的反应算符列表，包括：
+    - 算符名称
+    - 描述
+    - 适用条件
+    - 激活原因
+    """
+    
+    # 验证任务权限
+    job = db.query(ReactionNetworkJob).filter(
+        ReactionNetworkJob.id == job_id,
+        ReactionNetworkJob.user_id == current_user.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    
+    try:
+        # 导入rsnet库
+        import sys
+        import os
+        rsnet_path = os.path.join(os.path.dirname(__file__), "../../../../rsnet-main/rsnet-main")
+        if rsnet_path not in sys.path:
+            sys.path.insert(0, rsnet_path)
+        
+        from rsnet.operators.registry import OPERATOR_REGISTRY
+        from rsnet.operators.activation_rules import get_activation_rule
+        from rsnet.environment import Environment
+        
+        # 构建环境对象
+        env = Environment(
+            temperature=job.temperature,
+            voltage=job.voltage,
+            electrode_type=job.electrode_type.value if hasattr(job.electrode_type, 'value') else job.electrode_type
+        )
+        
+        # 获取所有算符信息
+        all_operators = OPERATOR_REGISTRY.list_operators()
+        
+        # 构建返回结果
+        activated_operators = []
+        
+        for op_name, op_info in all_operators.items():
+            # 获取激活规则
+            rule = get_activation_rule(op_name)
+            
+            if not rule:
+                continue
+            
+            # 检查环境驱动力匹配
+            env_drives = env.get_active_drives()
+            required_drives = rule.get('required_drives', [])
+            enhancing_drives = rule.get('enhancing_drives', [])
+            
+            # 判断是否激活
+            is_activated = False
+            activation_reasons = []
+            
+            if required_drives:
+                matched_drives = [d for d in required_drives if env_drives.get(d, False)]
+                if matched_drives:
+                    is_activated = True
+                    activation_reasons.extend([f"驱动力:{d}" for d in matched_drives])
+            else:
+                # 没有严格要求，检查增强驱动力
+                matched_drives = [d for d in enhancing_drives if env_drives.get(d, False)]
+                if matched_drives:
+                    is_activated = True
+                    activation_reasons.extend([f"增强驱动力:{d}" for d in matched_drives])
+                else:
+                    # 通用算符，总是激活
+                    is_activated = True
+                    activation_reasons.append("通用算符")
+            
+            if is_activated:
+                # 构建适用条件
+                conditions = []
+                if required_drives:
+                    conditions.append(f"需要:{', '.join(required_drives)}")
+                if enhancing_drives:
+                    conditions.append(f"增强:{', '.join(enhancing_drives)}")
+                
+                molecular_checks = rule.get('molecular_checks', {})
+                if molecular_checks:
+                    conditions.append(f"分子特征:{', '.join(molecular_checks.keys())}")
+                
+                activated_operators.append({
+                    "name": op_name,
+                    "description": op_info.get('description', '无描述'),
+                    "weight": rule.get('weight', 0.5),
+                    "conditions": conditions,
+                    "activation_reasons": activation_reasons,
+                    "required_drives": required_drives,
+                    "enhancing_drives": enhancing_drives,
+                    "molecular_checks": list(molecular_checks.keys()) if molecular_checks else []
+                })
+        
+        # 按权重排序
+        activated_operators.sort(key=lambda x: x['weight'], reverse=True)
+        
+        return {
+            "job_id": job.id,
+            "num_operators": len(activated_operators),
+            "operators": activated_operators,
+            "environment": {
+                "temperature": job.temperature,
+                "voltage": job.voltage,
+                "electrode_type": job.electrode_type.value if hasattr(job.electrode_type, 'value') else job.electrode_type,
+                "active_drives": list(env_drives.keys())
+            }
+        }
+        
+    except ImportError as e:
+        logger.error(f"Failed to import rsnet: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load operator information"
+        )
+    except Exception as e:
+        logger.error(f"Error getting activated operators: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+

@@ -1,9 +1,9 @@
 /**
  * Create Reaction Network Job Page
- * 创建反应网络任务 - 现代化表单设计
+ * 创建反应网络任务 - 统一使用离子+溶剂选择器
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     Card,
     Form,
@@ -14,7 +14,6 @@ import {
     Row,
     Col,
     message,
-    Steps,
     Space,
     Tag,
     Tooltip,
@@ -29,13 +28,47 @@ import {
     ThunderboltOutlined,
     SettingOutlined,
     RocketOutlined,
-    InfoCircleOutlined
+    InfoCircleOutlined,
+    DeleteOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { createReactionNetworkJob, submitReactionNetworkJob } from '../api/reactionNetwork';
+import { getAvailableIons } from '../api/electrolytes';
+import AnionSelectorWithGeneration from '../components/AnionSelectorWithGeneration';
 
 const { TextArea } = Input;
 const { Option } = Select;
+
+// Define IonInfo locally since it's not exported from api
+interface IonInfo {
+    name: string;
+    charge: number;
+    smiles: string;
+}
+
+// 溶剂列表（复用配方页面的常用溶剂）
+const SOLVENTS = [
+    { name: 'EC', fullName: '碳酸乙烯酯', smiles: 'C1COC(=O)O1' },
+    { name: 'PC', fullName: '碳酸丙烯酯', smiles: 'CC1COC(=O)O1' },
+    { name: 'DMC', fullName: '碳酸二甲酯', smiles: 'COC(=O)OC' },
+    { name: 'DEC', fullName: '碳酸二乙酯', smiles: 'CCOC(=O)OCC' },
+    { name: 'EMC', fullName: '碳酸甲乙酯', smiles: 'CCOC(=O)OC' },
+    { name: 'FEC', fullName: '氟代碳酸乙烯酯', smiles: 'C1C(OC(=O)O1)F' },
+    { name: 'DME', fullName: '乙二醇二甲醚', smiles: 'COCCOC' },
+    { name: 'DOL', fullName: '1,3-二氧戊环', smiles: 'C1COCO1' },
+    { name: 'Sulfolane', fullName: '环丁砜', smiles: 'C1CCS(=O)(=O)C1' },
+];
+
+interface SelectedIon {
+    name: string;
+    charge: number;
+    smiles: string;
+}
+
+interface SelectedSolvent {
+    name: string;
+    smiles: string;
+}
 
 const ReactionNetworkCreate: React.FC = () => {
     const navigate = useNavigate();
@@ -44,21 +77,91 @@ const ReactionNetworkCreate: React.FC = () => {
     const [currentStep, setCurrentStep] = useState(0);
     const [createdJobId, setCreatedJobId] = useState<number | null>(null);
 
+    // 离子和溶剂状态
+    const [availableCations, setAvailableCations] = useState<IonInfo[]>([]);
+    const [availableAnions, setAvailableAnions] = useState<IonInfo[]>([]);
+    const [selectedCations, setSelectedCations] = useState<SelectedIon[]>([]);
+    const [selectedAnions, setSelectedAnions] = useState<SelectedIon[]>([]);
+    const [selectedSolvents, setSelectedSolvents] = useState<SelectedSolvent[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [electrodeType, setElectrodeType] = useState<'anode' | 'cathode'>('anode');
+
+    useEffect(() => {
+        loadAvailableIons();
+    }, []);
+
+    const loadAvailableIons = async () => {
+        setLoading(true);
+        try {
+            const data = await getAvailableIons();
+            setAvailableCations((data.cations as any[]).map(c => ({ ...c, smiles: c.smiles || '' })));
+            setAvailableAnions((data.anions as any[]).map(a => ({ ...a, smiles: a.smiles || '' })));
+        } catch (error: any) {
+            message.error('加载可用离子列表失败');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const addCation = (ionName: string) => {
+        const ion = availableCations.find(i => i.name === ionName);
+        if (ion && !selectedCations.find(c => c.name === ionName)) {
+            setSelectedCations([...selectedCations, {
+                name: ion.name,
+                charge: ion.charge,
+                smiles: ion.smiles
+            }]);
+        }
+    };
+
+    const addAnion = (ionName: string) => {
+        const ion = availableAnions.find(i => i.name === ionName);
+        if (ion && !selectedAnions.find(a => a.name === ionName)) {
+            setSelectedAnions([...selectedAnions, {
+                name: ion.name,
+                charge: ion.charge,
+                smiles: ion.smiles
+            }]);
+        }
+    };
+
+    const removeCation = (ionName: string) => {
+        setSelectedCations(selectedCations.filter(c => c.name !== ionName));
+    };
+
+    const removeAnion = (ionName: string) => {
+        setSelectedAnions(selectedAnions.filter(a => a.name !== ionName));
+    };
+
+    const addSolvent = (solventName: string) => {
+        const solvent = SOLVENTS.find(s => s.name === solventName);
+        if (solvent && !selectedSolvents.find(s => s.name === solventName)) {
+            setSelectedSolvents([...selectedSolvents, {
+                name: solvent.name,
+                smiles: solvent.smiles
+            }]);
+        }
+    };
+
+    const removeSolvent = (solventName: string) => {
+        setSelectedSolvents(selectedSolvents.filter(s => s.name !== solventName));
+    };
+
     const onFinish = async (values: any) => {
         setSubmitting(true);
         try {
-            // 解析SMILES（每行一个）
-            const smilesText = values.initial_smiles_text || '';
-            const smilesList = smilesText
-                .split('\n')
-                .map((s: string) => s.trim())
-                .filter((s: string) => s.length > 0);
-
-            if (smilesList.length === 0) {
-                message.error('请至少输入一个SMILES');
+            // 验证至少有一个组分
+            if (selectedCations.length === 0 && selectedAnions.length === 0 && selectedSolvents.length === 0) {
+                message.error('请至少选择一个阳离子、阴离子或溶剂');
                 setSubmitting(false);
                 return;
             }
+
+            // 将选中的离子和溶剂转换为SMILES列表
+            const smilesList: string[] = [];
+            selectedCations.forEach(ion => smilesList.push(ion.smiles));
+            selectedAnions.forEach(ion => smilesList.push(ion.smiles));
+            selectedSolvents.forEach(solvent => smilesList.push(solvent.smiles));
 
             const jobData = {
                 job_name: values.job_name,
@@ -77,7 +180,6 @@ const ReactionNetworkCreate: React.FC = () => {
                 slurm_time: values.slurm_time
             };
 
-
             const job = await createReactionNetworkJob(jobData);
             setCreatedJobId(job.id);
             message.success('任务创建成功！');
@@ -85,7 +187,7 @@ const ReactionNetworkCreate: React.FC = () => {
             if (values.submit_immediately) {
                 await submitReactionNetworkJob(job.id);
                 message.success('任务已提交到计算队列');
-                navigate(`/reaction-network/${job.id}`);
+                navigate(`/workspace/liquid-electrolyte/reaction-network/${job.id}`);
             } else {
                 setCurrentStep(1);
             }
@@ -101,43 +203,35 @@ const ReactionNetworkCreate: React.FC = () => {
         try {
             await submitReactionNetworkJob(createdJobId);
             message.success('任务已提交！');
-            navigate(`/reaction-network/${createdJobId}`);
+            navigate(`/workspace/liquid-electrolyte/reaction-network/${createdJobId}`);
         } catch (error) {
             message.error('提交失败');
         }
     };
 
     // 预设模板
-    const templates = {
-        ec_lipf6: {
-            name: 'EC + LiPF6 电解液',
-            smiles: 'C1COC(=O)O1\n[Li+]\nF[P-](F)(F)(F)(F)F',
-            temperature: 300,
-            electrode_type: 'anode',
-            voltage: 0.1,
-            max_generations: 3
-        },
-        dmc_litfsi: {
-            name: 'DMC + LiTFSI 电解液',
-            smiles: 'COC(=O)OC\n[Li+]\nO=S(=O)([N-]S(=O)(=O)C(F)(F)F)C(F)(F)F',
-            temperature: 300,
-            electrode_type: 'anode',
-            voltage: 0.1,
-            max_generations: 3
+    const applyTemplate = (templateName: string) => {
+        if (templateName === 'ec_lipf6') {
+            setSelectedCations([{ name: 'Li+', charge: 1, smiles: '[Li+]' }]);
+            setSelectedAnions([{ name: 'PF6-', charge: -1, smiles: 'F[P-](F)(F)(F)(F)F' }]);
+            setSelectedSolvents([{ name: 'EC', smiles: 'C1COC(=O)O1' }]);
+            form.setFieldsValue({
+                job_name: 'EC + LiPF6 电解液反应网络',
+                electrode_type: 'anode',
+                voltage: 0.1
+            });
+            message.success('已应用 EC + LiPF6 模板');
+        } else if (templateName === 'dmc_litfsi') {
+            setSelectedCations([{ name: 'Li+', charge: 1, smiles: '[Li+]' }]);
+            setSelectedAnions([{ name: 'TFSI-', charge: -1, smiles: 'O=S(=O)([N-]S(=O)(=O)C(F)(F)F)C(F)(F)F' }]);
+            setSelectedSolvents([{ name: 'DMC', smiles: 'COC(=O)OC' }]);
+            form.setFieldsValue({
+                job_name: 'DMC + LiTFSI 电解液反应网络',
+                electrode_type: 'anode',
+                voltage: 0.1
+            });
+            message.success('已应用 DMC + LiTFSI 模板');
         }
-    };
-
-    const applyTemplate = (templateKey: keyof typeof templates) => {
-        const template = templates[templateKey];
-        form.setFieldsValue({
-            job_name: template.name,
-            initial_smiles_text: template.smiles,
-            temperature: template.temperature,
-            electrode_type: template.electrode_type,
-            voltage: template.voltage,
-            max_generations: template.max_generations
-        });
-        message.success('模板已应用');
     };
 
     if (currentStep === 1 && createdJobId) {
@@ -159,11 +253,11 @@ const ReactionNetworkCreate: React.FC = () => {
                             </Button>,
                             <Button
                                 key="view"
-                                onClick={() => navigate(`/reaction-network/${createdJobId}`)}
+                                onClick={() => navigate(`/workspace/liquid-electrolyte/reaction-network/${createdJobId}`)}
                             >
                                 查看任务详情
                             </Button>,
-                            <Button key="list" onClick={() => navigate('/reaction-network')}>
+                            <Button key="list" onClick={() => navigate('/workspace/liquid-electrolyte/reaction-network')}>
                                 返回任务列表
                             </Button>
                         ]}
@@ -200,7 +294,7 @@ const ReactionNetworkCreate: React.FC = () => {
             >
                 <Alert
                     message="什么是反应网络生成？"
-                    description="基于初始分子，通过智能算符系统自动发现可能的化学反应，使用XTB半经验方法计算能量，构建完整的反应网络。适用于电池电解液SEI形成、催化反应筛选、降解机制研究等场景。"
+                    description="基于初始分子（阳离子+阴离子+溶剂），通过智能算符系统自动发现可能的化学反应，使用XTB半经验方法计算能量，构建完整的反应网络。适用于电池电解液SEI/CEI形成、催化反应筛选、降解机制研究等场景。"
                     type="info"
                     showIcon
                     icon={<InfoCircleOutlined />}
@@ -258,82 +352,176 @@ const ReactionNetworkCreate: React.FC = () => {
                         </Form.Item>
                     </Card>
 
-                    {/* 初始分子 */}
-                    <Card type="inner" title="🧪 初始分子 (SMILES)" style={{ marginBottom: '16px' }}>
-                        <Form.Item
-                            name="initial_smiles_text"
-                            label={
-                                <span>
-                                    SMILES表达式
-                                    <Tooltip title="每行输入一个SMILES，支持离子（如[Li+]）、中性分子等">
-                                        <InfoCircleOutlined style={{ marginLeft: 8, color: '#1890ff' }} />
-                                    </Tooltip>
-                                </span>
-                            }
-                            rules={[{ required: true, message: '请输入至少一个SMILES' }]}
-                            extra={
-                                <Space>
-                                    <Tag color="blue">示例: C1COC(=O)O1 (EC)</Tag>
-                                    <Tag color="green">示例: [Li+] (锂离子)</Tag>
-                                    <Tag color="orange">示例: F[P-](F)(F)(F)(F)F (PF6-)</Tag>
-                                </Space>
-                            }
-                        >
-                            <TextArea
-                                rows={8}
-                                placeholder={'每行一个SMILES，例如:\nC1COC(=O)O1\n[Li+]\nF[P-](F)(F)(F)(F)F'}
-                                style={{ fontFamily: 'monospace' }}
-                            />
-                        </Form.Item>
+                    {/* 初始分子配置 - 离子和溶剂选择 */}
+                    <Card type="inner" title="🧪 初始分子配置" style={{ marginBottom: '16px' }}>
+                        <Alert
+                            message="选择电解液组分"
+                            description="请选择阳离子、阴离子和溶剂，系统将自动使用这些分子作为初始分子进行反应网络生成"
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: '16px' }}
+                        />
+
+                        <Row gutter={16}>
+                            {/* 阳离子 */}
+                            <Col span={8}>
+                                <div>
+                                    <div style={{ marginBottom: 8 }}>
+                                        <Tag color="blue">阳离子</Tag>
+                                    </div>
+                                    <Select
+                                        placeholder="选择阳离子"
+                                        style={{ width: '100%', marginBottom: 12 }}
+                                        onChange={addCation}
+                                        value={undefined}
+                                        showSearch
+                                        filterOption={(input, option) =>
+                                            String(option?.children ?? '').toLowerCase().includes(input.toLowerCase())
+                                        }
+                                    >
+                                        {availableCations
+                                            .filter(ion => !selectedCations.find(c => c.name === ion.name))
+                                            .map(ion => (
+                                                <Option key={ion.name} value={ion.name}>
+                                                    {ion.name} (+{ion.charge})
+                                                </Option>
+                                            ))}
+                                    </Select>
+                                    <div>
+                                        {selectedCations.map(ion => (
+                                            <Tag
+                                                key={ion.name}
+                                                color="blue"
+                                                closable
+                                                onClose={() => removeCation(ion.name)}
+                                                style={{ marginBottom: 8 }}
+                                            >
+                                                {ion.name}
+                                            </Tag>
+                                        ))}
+                                        {selectedCations.length === 0 && (
+                                            <Alert message="请选择阳离子" type="warning" showIcon style={{ padding: '4px 8px' }} />
+                                        )}
+                                    </div>
+                                </div>
+                            </Col>
+
+                            {/* 阴离子 */}
+                            <Col span={8}>
+                                <div>
+                                    <div style={{ marginBottom: 8 }}>
+                                        <Tag color="red">阴离子</Tag>
+                                    </div>
+                                    <AnionSelectorWithGeneration
+                                        availableAnions={availableAnions}
+                                        selectedAnions={selectedAnions.map(a => ({ ...a, concentration: 1.0 }))}
+                                        onAddAnion={addAnion}
+                                        onRefresh={loadAvailableIons}
+                                    />
+                                    <div style={{ marginTop: 12 }}>
+                                        {selectedAnions.map(ion => (
+                                            <Tag
+                                                key={ion.name}
+                                                color="red"
+                                                closable
+                                                onClose={() => removeAnion(ion.name)}
+                                                style={{ marginBottom: 8 }}
+                                            >
+                                                {ion.name}
+                                            </Tag>
+                                        ))}
+                                        {selectedAnions.length === 0 && (
+                                            <Alert message="请选择阴离子" type="warning" showIcon style={{ padding: '4px 8px' }} />
+                                        )}
+                                    </div>
+                                </div>
+                            </Col>
+
+                            {/* 溶剂 */}
+                            <Col span={8}>
+                                <div>
+                                    <div style={{ marginBottom: 8 }}>
+                                        <Tag color="green">溶剂</Tag>
+                                    </div>
+                                    <Select
+                                        placeholder="选择溶剂"
+                                        style={{ width: '100%', marginBottom: 12 }}
+                                        onChange={addSolvent}
+                                        value={undefined}
+                                        showSearch
+                                        filterOption={(input, option) =>
+                                            String(option?.children ?? '').toLowerCase().includes(input.toLowerCase())
+                                        }
+                                    >
+                                        {SOLVENTS
+                                            .filter(s => !selectedSolvents.find(sel => sel.name === s.name))
+                                            .map(solvent => (
+                                                <Option key={solvent.name} value={solvent.name}>
+                                                    {solvent.name} - {solvent.fullName}
+                                                </Option>
+                                            ))}
+                                    </Select>
+                                    <div>
+                                        {selectedSolvents.map(solvent => (
+                                            <Tag
+                                                key={solvent.name}
+                                                color="green"
+                                                closable
+                                                onClose={() => removeSolvent(solvent.name)}
+                                                style={{ marginBottom: 8 }}
+                                            >
+                                                {solvent.name}
+                                            </Tag>
+                                        ))}
+                                        {selectedSolvents.length === 0 && (
+                                            <Alert message="可选：添加溶剂分子" type="info" showIcon style={{ padding: '4px 8px' }} />
+                                        )}
+                                    </div>
+                                </div>
+                            </Col>
+                        </Row>
                     </Card>
 
                     {/* 环境参数 */}
-                    <Card
-                        type="inner"
-                        title={
-                            <Space>
-                                <FireOutlined />
-                                <span>环境参数</span>
-                            </Space>
-                        }
-                        style={{ marginBottom: '16px' }}
-                    >
+                    <Card type="inner" title={<><ThunderboltOutlined /> 环境参数</>} style={{ marginBottom: '16px' }}>
                         <Row gutter={16}>
-                            <Col span={6}>
+                            <Col span={8}>
                                 <Form.Item
                                     name="temperature"
                                     label="温度 (K)"
-                                    tooltip="影响反应的热激活过程"
+                                    rules={[{ required: true }]}
                                 >
                                     <InputNumber
                                         min={0}
                                         max={1000}
+                                        step={10}
                                         style={{ width: '100%' }}
                                         addonAfter="K"
                                     />
                                 </Form.Item>
                             </Col>
-                            <Col span={6}>
+                            <Col span={8}>
                                 <Form.Item
                                     name="electrode_type"
                                     label="电极类型"
-                                    tooltip="影响驱动力的方向和物种注入"
+                                    rules={[{ required: true }]}
+                                    tooltip="阳极研究SEI，阴极研究CEI"
                                 >
-                                    <Select>
-                                        <Option value="anode">阳极 (负极)</Option>
-                                        <Option value="cathode">阴极 (正极)</Option>
+                                    <Select onChange={(value) => setElectrodeType(value as 'anode' | 'cathode')}>
+                                        <Option value="anode">阳极 (负极) - SEI形成</Option>
+                                        <Option value="cathode">阴极 (正极) - CEI形成</Option>
                                     </Select>
                                 </Form.Item>
                             </Col>
-                            <Col span={6}>
+                            <Col span={8}>
                                 <Form.Item
                                     name="voltage"
                                     label="电压 (V)"
-                                    tooltip="电极电势，影响氧化/还原反应"
+                                    rules={[{ required: true }]}
                                 >
                                     <InputNumber
-                                        min={-10}
-                                        max={10}
+                                        min={0}
+                                        max={5}
                                         step={0.1}
                                         style={{ width: '100%' }}
                                         addonAfter="V"
@@ -342,72 +530,76 @@ const ReactionNetworkCreate: React.FC = () => {
                             </Col>
                         </Row>
 
-                        <Divider orientation="left" plain>电极材料 (影响自动注入物种)</Divider>
+                        <Divider orientation="left" plain>
+                            电极材料 (影响自动注入物种)
+                        </Divider>
+
+                        <Alert
+                            message={`已选择${electrodeType === 'anode' ? '阳极(负极)' : '阴极(正极)'}，仅需配置对应材料`}
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                        />
 
                         <Row gutter={16}>
-                            <Col span={12}>
-                                <Form.Item
-                                    name="anode_material"
-                                    label="负极材料"
-                                    tooltip="决定载流子类型(Li/Na/K)和SEI化学"
-                                    extra="自动注入相应的离子和原子"
-                                >
-                                    <Select>
-                                        <Option value="GRAPHITE">石墨 (Li+)</Option>
-                                        <Option value="LI_METAL">锂金属 (Li+)</Option>
-                                        <Option value="SILICON">硅负极 (Li+)</Option>
-                                        <Option value="SIC">硅碳复合 (Li+)</Option>
-                                        <Option value="LTO">钛酸锂 LTO (Li+)</Option>
-                                        <Option value="NA_METAL">钠金属 (Na+)</Option>
-                                        <Option value="HARD_CARBON">硬碳 (Na+)</Option>
-                                        <Option value="SOFT_CARBON">软碳 (Na+)</Option>
-                                        <Option value="K_METAL">钾金属 (K+)</Option>
-                                        <Option value="K_GRAPHITE">钾石墨 KC8 (K+)</Option>
-                                    </Select>
-                                </Form.Item>
-                            </Col>
-                            <Col span={12}>
-                                <Form.Item
-                                    name="cathode_material"
-                                    label="正极材料"
-                                    tooltip="决定氧释放行为和CEI化学"
-                                    extra="高电压时自动注入氧物种"
-                                >
-                                    <Select>
-                                        <Option value="NMC">NMC三元 (通用)</Option>
-                                        <Option value="NMC811">NMC811 高镍</Option>
-                                        <Option value="NMC622">NMC622</Option>
-                                        <Option value="LCO">钴酸锂 LCO</Option>
-                                        <Option value="NCA">NCA镍钴铝</Option>
-                                        <Option value="LFP">磷酸铁锂 LFP (稳定)</Option>
-                                        <Option value="LMO">锰酸锂 LMO</Option>
-                                        <Option value="LNMO">高电压尖晶石 LNMO</Option>
-                                        <Option value="LRLO">富锂层状氧化物</Option>
-                                    </Select>
-                                </Form.Item>
-                            </Col>
+                            {electrodeType === 'anode' ? (
+                                <Col span={24}>
+                                    <Form.Item
+                                        name="anode_material"
+                                        label="负极材料"
+                                        tooltip="决定载流子类型(Li/Na/K)和SEI化学"
+                                        extra="系统将自动注入相应的载流子离子和金属原子"
+                                        rules={[{ required: true, message: '请选择负极材料' }]}
+                                    >
+                                        <Select size="large">
+                                            <Option value="GRAPHITE">石墨 (Li+) - 成熟SEI</Option>
+                                            <Option value="LI_METAL">锂金属 (Li+) - 金属SEI</Option>
+                                            <Option value="SILICON">硅负极 (Li+) - Si-O-Li SEI</Option>
+                                            <Option value="SIC">硅碳复合 (Li+)</Option>
+                                            <Option value="LTO">钛酸锂 LTO (Li+) - 无SEI</Option>
+                                            <Option value="NA_METAL">钠金属 (Na+)</Option>
+                                            <Option value="HARD_CARBON">硬碳 (Na+)</Option>
+                                            <Option value="SOFT_CARBON">软碳 (Na+)</Option>
+                                            <Option value="K_METAL">钾金属 (K+)</Option>
+                                            <Option value="K_GRAPHITE">钾石墨 KC8 (K+)</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                            ) : (
+                                <Col span={24}>
+                                    <Form.Item
+                                        name="cathode_material"
+                                        label="正极材料"
+                                        tooltip="决定氧释放行为和CEI化学"
+                                        extra="系统将根据电压自动注入氧物种和自由基"
+                                        rules={[{ required: true, message: '请选择正极材料' }]}
+                                    >
+                                        <Select size="large">
+                                            <Option value="NMC">NMC三元 (通用) - 中等氧释放</Option>
+                                            <Option value="NMC811">NMC811 高镍 - 高氧释放</Option>
+                                            <Option value="NMC622">NMC622 - 适度氧释放</Option>
+                                            <Option value="LCO">钴酸锂 LCO - 氧释放</Option>
+                                            <Option value="NCA">NCA镍钴铝 - 高氧释放</Option>
+                                            <Option value="LFP">磷酸铁锂 LFP - 无氧释放</Option>
+                                            <Option value="LMO">锰酸锂 LMO</Option>
+                                            <Option value="LNMO">高电压尖晶石 LNMO - 强氧释放</Option>
+                                            <Option value="LRLO">富锂层状氧化物 - 氧损失</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                            )}
                         </Row>
                     </Card>
 
-
                     {/* 网络生成参数 */}
-                    <Card
-                        type="inner"
-                        title={
-                            <Space>
-                                <ThunderboltOutlined />
-                                <span>网络生成参数</span>
-                            </Space>
-                        }
-                        style={{ marginBottom: '16px' }}
-                    >
+                    <Card type="inner" title={<><SettingOutlined /> 网络生成参数</>} style={{ marginBottom: '16px' }}>
                         <Row gutter={16}>
                             <Col span={8}>
                                 <Form.Item
                                     name="max_generations"
                                     label="最大代数"
-                                    tooltip="反应迭代的最大轮数，建议1-5代"
-                                    extra="代数越大，网络越复杂"
+                                    tooltip="控制反应网络的深度"
+                                    rules={[{ required: true }]}
                                 >
                                     <InputNumber min={1} max={10} style={{ width: '100%' }} />
                                 </Form.Item>
@@ -416,80 +608,61 @@ const ReactionNetworkCreate: React.FC = () => {
                                 <Form.Item
                                     name="max_species"
                                     label="最大分子数"
-                                    tooltip="限制网络规模，避免爆炸性增长"
+                                    tooltip="限制网络中的分子总数"
+                                    rules={[{ required: true }]}
                                 >
-                                    <InputNumber min={1} max={200} style={{ width: '100%' }} />
+                                    <InputNumber min={10} max={500} step={10} style={{ width: '100%' }} />
                                 </Form.Item>
                             </Col>
                             <Col span={8}>
                                 <Form.Item
                                     name="energy_cutoff"
                                     label="能量截断 (kcal/mol)"
-                                    tooltip="排除高能反应，只保留能量低于此值的反应"
+                                    tooltip="过滤高能量反应"
+                                    rules={[{ required: true }]}
                                 >
-                                    <InputNumber
-                                        min={0}
-                                        max={200}
-                                        style={{ width: '100%' }}
-                                        addonAfter="kcal/mol"
-                                    />
+                                    <InputNumber min={0} max={200} step={10} style={{ width: '100%' }} addonAfter="kcal/mol" />
                                 </Form.Item>
                             </Col>
                         </Row>
                     </Card>
 
-                    {/* Slurm资源配置 */}
-                    <Card
-                        type="inner"
-                        title={
-                            <Space>
-                                <SettingOutlined />
-                                <span>计算资源配置</span>
-                            </Space>
-                        }
-                        style={{ marginBottom: '16px' }}
-                    >
+                    {/* 计算资源 */}
+                    <Card type="inner" title={<><FireOutlined /> 计算资源</>} style={{ marginBottom: '16px' }}>
                         <Row gutter={16}>
                             <Col span={8}>
-                                <Form.Item name="slurm_partition" label="Slurm队列">
+                                <Form.Item name="slurm_partition" label="计算分区">
                                     <Select>
-                                        <Option value="cpu">CPU队列</Option>
-                                        <Option value="gpu">GPU队列</Option>
-                                        <Option value="fat">大内存队列</Option>
+                                        <Option value="cpu">CPU分区</Option>
+                                        <Option value="gpu">GPU分区</Option>
                                     </Select>
                                 </Form.Item>
                             </Col>
                             <Col span={8}>
-                                <Form.Item name="slurm_cpus" label="CPU核心数">
+                                <Form.Item name="slurm_cpus" label="CPU核数">
                                     <InputNumber min={1} max={128} style={{ width: '100%' }} />
                                 </Form.Item>
                             </Col>
                             <Col span={8}>
-                                <Form.Item
-                                    name="slurm_time"
-                                    label="最大运行时间"
-                                    extra="单位: 分钟"
-                                >
-                                    <InputNumber min={10} max={43200} style={{ width: '100%' }} />
+                                <Form.Item name="slurm_time" label="最大运行时间 (分钟)">
+                                    <InputNumber min={60} max={43200} step={60} style={{ width: '100%' }} addonAfter="分钟" />
                                 </Form.Item>
                             </Col>
                         </Row>
                     </Card>
 
-                    <Divider />
-
                     {/* 提交按钮 */}
                     <Form.Item>
                         <Space size="large" style={{ width: '100%', justifyContent: 'center' }}>
-                            <Button onClick={() => navigate('/reaction-network')} size="large">
+                            <Button onClick={() => navigate('/workspace/liquid-electrolyte/reaction-network')} size="large">
                                 取消
                             </Button>
                             <Button
                                 type="primary"
                                 htmlType="submit"
-                                loading={submitting}
-                                icon={<RocketOutlined />}
                                 size="large"
+                                icon={<RocketOutlined />}
+                                loading={submitting}
                             >
                                 创建任务
                             </Button>

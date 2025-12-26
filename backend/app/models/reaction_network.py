@@ -240,7 +240,8 @@ class ReactionNetworkReaction(Base):
     equilibrium_constant = Column(Float, comment="平衡常数")
     
     # 额外信息
-    metadata = Column(JSONB, default={}, comment="反应元数据")
+    reaction_metadata = Column(JSONB, default={}, comment="反应元数据")
+
     
     # 时间戳
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")

@@ -1,5 +1,6 @@
 /**
- * 用户指南页面
+ * Molyte 科学计算指南
+ * 专注于计算原理、功能意义及操作最佳实践
  */
 import { useNavigate } from 'react-router-dom';
 import {
@@ -11,27 +12,38 @@ import {
   Button,
   Divider,
   Space,
+  Tabs,
+  Tag,
+  Steps,
+  Alert,
+  Tooltip,
+  Timeline,
+  Image,
+  Table
 } from 'antd';
 import {
   HomeOutlined,
   ThunderboltOutlined,
-  BookOutlined,
   ExperimentOutlined,
   RocketOutlined,
   LineChartOutlined,
-  QuestionCircleOutlined,
   BulbOutlined,
-  SafetyCertificateOutlined,
-  AimOutlined,
-  AreaChartOutlined,
-  DotChartOutlined,
-  ArrowRightOutlined,
+  DatabaseOutlined,
+  FireOutlined,
+  ClusterOutlined,
+  ApartmentOutlined,
   CheckCircleOutlined,
+  InfoCircleOutlined,
+  SyncOutlined,
+  SettingOutlined,
+  DashboardOutlined
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/authStore';
 import './Guide.css';
 
 const { Title, Paragraph, Text } = Typography;
+const { TabPane } = Tabs;
+const { Panel } = Collapse;
 
 export default function Guide() {
   const navigate = useNavigate();
@@ -39,558 +51,616 @@ export default function Guide() {
 
   return (
     <div className="guide-container">
-      {/* 顶部导航栏 */}
+      {/* Header */}
       <header className="guide-header">
         <div className="guide-header-content">
           <div className="guide-logo" onClick={() => navigate('/')}>
             <div className="guide-logo-icon">
               <ThunderboltOutlined />
             </div>
-            <span className="guide-logo-text">Molyte</span>
+            <span className="guide-logo-text">Molyte 计算指南</span>
           </div>
-          
           <nav className="guide-nav">
-            <a href="#platform">平台介绍</a>
-            <a href="#md-theory">MD原理</a>
-            <a href="#workflow">使用流程</a>
-            <a href="#results">结果解读</a>
-            <a href="#faq">常见问题</a>
+            <a href="#md-simulation">MD 溶剂化</a>
+            <a href="#reaction-network">SEI 反应网络</a>
+            <a href="#md-simulation">MD 溶剂化</a>
+            <a href="#reaction-network">SEI 反应网络</a>
+            <a href="#qc-calc">量子化学</a>
+            <a href="#post-process">数据后处理</a>
+            <a href="#best-practices">最佳实践</a>
           </nav>
-          
           <div className="guide-header-actions">
-            <Button
-              type="text"
-              icon={<HomeOutlined />}
-              onClick={() => navigate('/')}
-              className="guide-back-btn"
-            >
+            <Button type="text" onClick={() => navigate('/')} className="guide-back-btn">
               返回首页
             </Button>
             {isAuthenticated ? (
-              <Button
-                type="primary"
-                onClick={() => navigate('/workspace/dashboard')}
-                className="guide-action-btn"
-              >
-                进入工作台
+              <Button type="primary" onClick={() => navigate('/workspace/dashboard')} className="guide-action-btn">
+                开始计算
               </Button>
             ) : (
-              <Button
-                type="primary"
-                onClick={() => navigate('/login')}
-                className="guide-action-btn"
-              >
-                登录 / 注册
+              <Button type="primary" onClick={() => navigate('/login')} className="guide-action-btn">
+                登录平台
               </Button>
             )}
           </div>
         </div>
       </header>
 
-      {/* 主内容区域 */}
       <main className="guide-main">
-        {/* Hero Section */}
+        {/* Intro */}
         <section className="guide-hero">
           <div className="guide-hero-content">
-            <div className="guide-hero-icon">
-              <BookOutlined />
-            </div>
-            <Title level={1} className="guide-hero-title">
-              用户指南
-            </Title>
+            <Title level={1} className="guide-hero-title">电池材料计算背后的科学</Title>
             <Paragraph className="guide-hero-subtitle">
-              全面了解 Molyte 电解液研发模拟平台的功能与使用方法
+              从微观尺度理解电解液性能：原理、方法与结果解读
             </Paragraph>
           </div>
         </section>
 
-        {/* 快速导航卡片 */}
-        <section className="guide-quick-nav">
-          <Row gutter={[24, 24]}>
-            <Col xs={24} sm={12} lg={6}>
-              <Card className="quick-nav-card" hoverable onClick={() => document.getElementById('platform')?.scrollIntoView({ behavior: 'smooth' })}>
-                <div className="quick-nav-icon icon-blue"><RocketOutlined /></div>
-                <Title level={4}>平台介绍</Title>
-                <Text type="secondary">了解平台核心功能</Text>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} lg={6}>
-              <Card className="quick-nav-card" hoverable onClick={() => document.getElementById('md-theory')?.scrollIntoView({ behavior: 'smooth' })}>
-                <div className="quick-nav-icon icon-purple"><ExperimentOutlined /></div>
-                <Title level={4}>MD 原理</Title>
-                <Text type="secondary">分子动力学基础知识</Text>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} lg={6}>
-              <Card className="quick-nav-card" hoverable onClick={() => document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' })}>
-                <div className="quick-nav-icon icon-green"><LineChartOutlined /></div>
-                <Title level={4}>结果解读</Title>
-                <Text type="secondary">RDF/MSD 结果分析</Text>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} lg={6}>
-              <Card className="quick-nav-card" hoverable onClick={() => document.getElementById('faq')?.scrollIntoView({ behavior: 'smooth' })}>
-                <div className="quick-nav-icon icon-orange"><QuestionCircleOutlined /></div>
-                <Title level={4}>常见问题</Title>
-                <Text type="secondary">FAQ 与技术支持</Text>
-              </Card>
-            </Col>
-          </Row>
-        </section>
-
-        {/* 平台介绍 */}
-        <section id="platform" className="guide-section">
+        {/* Module 1: Liquid Electrolyte MD */}
+        <section id="md-simulation" className="guide-section">
           <div className="section-header">
-            <div className="section-icon"><RocketOutlined /></div>
-            <Title level={2}>平台介绍</Title>
+            <div className="section-icon"><ExperimentOutlined /></div>
+            <Title level={2}>溶元调配与分子动力学 (MD)</Title>
           </div>
 
           <Card className="guide-card">
-            <Title level={3}>🎯 平台定位</Title>
-            <Paragraph className="guide-paragraph">
-              <Text strong>Molyte</Text> 是一个专注于<Text mark>电池电解液分子动力学模拟</Text>的一站式云计算平台。
-              平台整合了高性能计算资源、自动化工作流和智能数据分析，帮助研究人员快速完成电解液配方的筛选与优化。
-            </Paragraph>
+            <Tabs defaultActiveKey="principle" size="large">
+              <TabPane tab={<span><BulbOutlined /> 计算原理</span>} key="principle">
+                <Row gutter={24}>
+                  <Col span={14}>
+                    <Title level={4}>经典力场模拟 (OPLS-AA)</Title>
+                    <Paragraph>
+                      本模块的核心是通过分子动力学（MD）模拟电解液在微观尺度的热运动。我们采用 <Text strong>OPLS-AA (Optimized Potentials for Liquid Simulations)</Text> 全原子力场，
+                      它包含键合相互作用（键长、键角、二面角）和非键合相互作用（范德华力、库仑力）。
+                    </Paragraph>
+                    <div className="formula-box">
+                      E_total = E_bond + E_angle + E_torsion + E_vdw + E_coulomb
+                    </div>
+                    <Paragraph>
+                      <ul>
+                        <li><Text strong>E_vdw</Text>: 采用 Lennard-Jones 12-6 势能函数描述原子间的排斥与吸引。</li>
+                        <li><Text strong>E_coulomb</Text>: 通过 CM1A/LBCC 电荷模型计算静电相互作用，通过 PME 算法处理长程作用。</li>
+                      </ul>
+                    </Paragraph>
+                    <Alert
+                      message="为什么要算 MD？"
+                      description="实验只能测得宏观性质（如电导率），但无法直接观测锂离子的微观溶剂化结构（Solvation Structure）。MD 模拟如同显微镜，让我们'看到'锂离子被哪些溶剂分子包围，这直接决定了去溶剂化能（影响低温性能）和界面成膜机制。"
+                      type="info"
+                      showIcon
+                    />
+                  </Col>
+                  <Col span={10}>
+                    <div className="theory-card">
+                      <Title level={5}>模拟流程详解</Title>
+                      <Steps direction="vertical" size="small" current={1} items={[
+                        { title: 'Packmol 建模', description: '根据设定的摩尔比，在模拟盒子中随机填充阳离子、阴离子和溶剂分子。' },
+                        { title: '能量最小化', description: '消除原子重叠，防止初始构型能量过高导致体系崩溃 ("爆炸")。' },
+                        { title: 'NPT 平衡 (等温等压)', description: '关键步骤！调整盒子体积以达到实验密度。通常需要 1ns 以上。' },
+                        { title: 'NVT 采样 (等温等容)', description: '在平衡密度下收集轨迹数据，用于计算扩散系数和 RDF。' }
+                      ]} />
+                    </div>
+                  </Col>
+                </Row>
+              </TabPane>
 
-            <Divider />
+              <TabPane tab={<span><LineChartOutlined /> 结果解读</span>} key="results">
+                <Row gutter={24}>
+                  <Col span={12}>
+                    <Card title="1. 径向分布函数 (RDF, g(r))" bordered={false} className="feature-item">
+                      <Row gutter={24} align="middle">
+                        <Col span={12}>
+                          <Paragraph>
+                            RDF 反映了以 Li+ 为中心，距离 r 处出现氧原子（来自溶剂或阴离子）的概率密度。
+                          </Paragraph>
+                          <ul>
+                            <li><Text strong>第一峰位置</Text>: 代表 Li-O 键长（通常约 1.8-2.1 Å）。</li>
+                            <li><Text strong>配位数 (CN)</Text>: 对第一峰积分。CN ≈ 4 说明是典型的四配位结构；CN &gt; 5 可能存在溶剂共享或聚集体。</li>
+                            <li><Text strong>意义</Text>: 判断溶剂的竞争能力。如果阴离子的峰很高，说明形成了接触离子对 (CIP) 或聚集体 (AGG)。</li>
+                          </ul>
+                        </Col>
+                        <Col span={12} style={{ textAlign: 'center' }}>
+                          <Image
+                            src="/assets/rdf_chart_blue.png"
+                            alt="RDF Chart Visualization"
+                            style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '100%', maxHeight: 300 }}
+                          />
+                        </Col>
+                      </Row>
+                    </Card>
+                  </Col>
+                  <Col span={12}>
+                    <Card title="2. 均方位移 (MSD) 与自扩散系数" bordered={false} className="feature-item">
+                      <Row gutter={24} align="middle">
+                        <Col span={12}>
+                          <Paragraph>
+                            MSD 描述粒子随时间扩散的距离平方。其斜率直接正比于扩散系数 D。
+                          </Paragraph>
+                          <div className="formula-box" style={{ margin: '16px 0' }}>D = MSD / (6 * t)</div>
+                          <ul>
+                            <li><Text strong>斜率越陡</Text>: 扩散越快，离子电导率越高。</li>
+                            <li><Text strong>非线性区</Text>: 模拟初期（弹道区）的数据不可用，必须取 MSD 线性段计算斜率。</li>
+                            <li><Text strong>机理</Text>: 若锂离子的 D 与溶剂的 D 相近，说明是 Vehicular 机制。</li>
+                          </ul>
+                        </Col>
+                        <Col span={12} style={{ textAlign: 'center' }}>
+                          <Image
+                            src="/assets/msd_chart_blue.png"
+                            alt="MSD Chart Visualization"
+                            style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '100%', maxHeight: 300 }}
+                          />
+                        </Col>
+                      </Row>
+                    </Card>
+                  </Col>
+                </Row>
+                <Row gutter={24} style={{ marginTop: 24 }}>
+                  <Col span={24}>
+                    <Card title="3. 溶剂化结构可视化 (3D Visualization)" bordered={false} className="feature-item">
+                      <Row gutter={24} align="middle">
+                        <Col span={10}>
+                          <Paragraph>
+                            高精度的 3D 渲染图帮助直观理解离子的配位环境。紫色为中心锂离子，周围环绕着 EC/DMC 溶剂分子，形成第一配位壳层。
+                          </Paragraph>
+                          <ul>
+                            <li><Text strong>配位壳层</Text>: 观察第一配位层的溶剂分子数量和排列方式</li>
+                            <li><Text strong>离子对</Text>: 识别阴离子是否进入配位层 (CIP/AGG 结构)</li>
+                            <li><Text strong>空间结构</Text>: 理解离子-溶剂、离子-阴离子的空间相互作用模式</li>
+                          </ul>
+                        </Col>
+                        <Col span={14} style={{ textAlign: 'center' }}>
+                          <Image
+                            src="/assets/solvation_structure.png"
+                            alt="Li+ Solvation Structure"
+                            style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '100%', maxHeight: 350 }}
+                          />
+                        </Col>
+                      </Row>
+                    </Card>
+                  </Col>
+                </Row>
+              </TabPane>
 
-            <Title level={3}>✨ 核心功能</Title>
+              <TabPane tab={<span><SettingOutlined /> 操作指南</span>} key="guide">
+                <Alert
+                  message="完整操作流程"
+                  description="从配方设计到结果分析的全流程指导，帮助您快速上手并获得高质量结果。"
+                  type="success"
+                  showIcon
+                  style={{ marginBottom: 24 }}
+                />
+                <Collapse accordion defaultActiveKey={['1']}>
+                  <Panel header="📋 Step 1: 配方设计与参数设置" key="1">
+                    <Title level={5}>1.1 组分选择</Title>
+                    <Paragraph>
+                      <ul>
+                        <li><Text strong>阳离子</Text>: 通常选择 Li+（锂离子电池）或 Na+（钠离子电池）</li>
+                        <li><Text strong>阴离子</Text>:
+                          <br />• PF6⁻, TFSI⁻ (常规电解液)
+                          <br />• FSI⁻, BOB⁻ (低温/高压专用)
+                          <br />• 建议盐浓度: 1.0-1.2 M (标准), 3-5 M (高浓度电解液 HCE)
+                        </li>
+                        <li><Text strong>溶剂</Text>:
+                          <br />• EC+DMC (经典配方，循环稳定)
+                          <br />• EC+EMC (低温性能优)
+                          <br />• FEC 添加剂 (5-10%, 改善 SEI)
+                        </li>
+                      </ul>
+                    </Paragraph>
+                    <Title level={5}>1.2 温度与时长策略</Title>
+                    <Table
+                      size="small"
+                      dataSource={[
+                        { key: '1', scenario: '快速筛选', temp: '298 K', npt: '0.5 ns', nvt: '1 ns', purpose: '定性对比配位结构' },
+                        { key: '2', scenario: '标准计算', temp: '298 K', npt: '2 ns', nvt: '5 ns', purpose: '发表级数据质量' },
+                        { key: '3', scenario: '高温加速', temp: '333-353 K', npt: '1 ns', nvt: '3 ns', purpose: '高粘度体系快速收敛' },
+                        { key: '4', scenario: '低温性能', temp: '253 K', npt: '5 ns', nvt: '20 ns', purpose: '低温电池设计' },
+                      ]}
+                      columns={[
+                        { title: '应用场景', dataIndex: 'scenario', key: 'scenario' },
+                        { title: '温度', dataIndex: 'temp', key: 'temp' },
+                        { title: 'NPT 平衡', dataIndex: 'npt', key: 'npt' },
+                        { title: 'NVT 采样', dataIndex: 'nvt', key: 'nvt' },
+                        { title: '用途', dataIndex: 'purpose', key: 'purpose' },
+                      ]}
+                      pagination={false}
+                    />
+                  </Panel>
+
+                  <Panel header="⚙️ Step 2: 任务提交与监控" key="2">
+                    <Paragraph>
+                      <Text strong>提交前检查清单:</Text>
+                      <ul>
+                        <li>✓ 确认盒子尺寸: 建议 &gt;40 Å (避免周期性边界效应)</li>
+                        <li>✓ 分子数量: 总原子数 3000-8000 (平衡精度与速度)</li>
+                        <li>✓ 时间步长: 默认 1 fs (刚性键) 或 0.5 fs (柔性全原子)</li>
+                      </ul>
+                    </Paragraph>
+                    <Paragraph>
+                      <Text strong>任务监控:</Text>
+                      <br />• 在 "任务列表" 页面实时查看进度
+                      <br />• NPT 阶段: 关注密度收敛曲线 (目标: ±0.02 g/cm³)
+                      <br />• NVT 阶段: 检查温度波动 (应 &lt;5 K)
+                    </Paragraph>
+                  </Panel>
+
+                  <Panel header="📊 Step 3: 结果分析与判断" key="3">
+                    <Title level={5}>3.1 RDF 分析</Title>
+                    <Paragraph>
+                      <Text strong>关键指标:</Text>
+                      <ul>
+                        <li>第一峰位置: Li-O 距离应在 1.9-2.1 Å</li>
+                        <li>配位数 CN: 积分第一峰至第一谷底
+                          <br />• CN = 4: 典型四配位 (EC/DMC 体系)
+                          <br />• CN = 5-6: 高浓度或强配位溶剂
+                          <br />• CN &lt; 4: 可能存在离子对 (CIP/AGG)
+                        </li>
+                        <li>阴离子峰强度: 峰高 &gt;1.5 说明阴离子参与配位 (有利于 SEI)</li>
+                      </ul>
+                    </Paragraph>
+                    <Title level={5}>3.2 MSD 与扩散系数</Title>
+                    <Paragraph>
+                      <Text strong>数据处理:</Text>
+                      <ul>
+                        <li>舍弃前 20% 数据 (弹道区)</li>
+                        <li>线性拟合 MSD vs t 曲线 (R² &gt; 0.98)</li>
+                        <li>计算 D = slope / 6</li>
+                        <li>典型值参考:
+                          <br />• Li+ 在 EC/DMC (1M LiPF6): D ≈ 2-5 × 10⁻⁶ cm²/s
+                          <br />• 若 D &lt; 1 × 10⁻⁶: 体系过于粘稠或未平衡
+                        </li>
+                      </ul>
+                    </Paragraph>
+                  </Panel>
+
+                  <Panel header="⚠️ 常见问题与解决" key="4">
+                    <Paragraph>
+                      <Text strong type="danger">问题 1: 密度不收敛</Text>
+                      <br />→ 延长 NPT 时间至 5 ns
+                      <br />→ 检查初始构型是否合理 (Packmol 可能生成重叠)
+                    </Paragraph>
+                    <Paragraph>
+                      <Text strong type="danger">问题 2: MSD 曲线不是直线</Text>
+                      <br />→ NVT 时间不足，延长至 10 ns
+                      <br />→ 体系可能存在相分离或结晶
+                    </Paragraph>
+                    <Paragraph>
+                      <Text strong type="danger">问题 3: 扩散系数异常大/小</Text>
+                      <br />→ 检查温度设置是否正确
+                      <br />→ 验证力场参数 (OPLS-AA 对某些新型溶剂可能不准)
+                    </Paragraph>
+                  </Panel>
+                </Collapse>
+              </TabPane>
+            </Tabs>
+          </Card>
+        </section>
+
+        {/* Module 2: Reaction Network */}
+        <section id="reaction-network" className="guide-section">
+          <div className="section-header">
+            <div className="section-icon"><FireOutlined /></div>
+            <Title level={2}>溶盐反应网络 (Reaction Network)</Title>
+          </div>
+
+          <Alert
+            message="预测 SEI/CEI 膜成分的关键技术"
+            description="本模块通过模拟分子在电压、温度和活性自由基驱动下的化学演化，预测界面膜的组成成分。"
+            type="warning"
+            showIcon
+            style={{ marginBottom: 24 }}
+          />
+
+          <Card className="guide-card">
             <Row gutter={[24, 24]}>
-              <Col xs={24} sm={12} lg={8}>
-                <div className="feature-item">
-                  <div className="feature-item-icon" style={{ background: 'linear-gradient(135deg, #667eea 0%, #5a67d8 100%)' }}>
-                    <ExperimentOutlined />
-                  </div>
-                  <Title level={4}>配方管理</Title>
+              <Col xs={24} lg={12}>
+                <div className="theory-card" style={{ height: '100%' }}>
+                  <Title level={4}>RSNet 算法原理</Title>
                   <Paragraph>
-                    可视化配置电解液配方，支持多种阳离子（Li⁺、Na⁺、K⁺等）、阴离子（FSI⁻、TFSI⁻、PF₆⁻等）和溶剂（EC、DMC、EMC等）的组合。
+                    RSNet (Reaction Space Network) 是一种基于规则的反应生成算法。不同于昂贵的 AIMD（从头算分子动力学），
+                    RSNet 通过预定义的<Text strong>反应算符 (Operators)</Text> 快速遍历化学空间。
                   </Paragraph>
+                  <Divider />
+                  <Title level={5}>算符激活机制</Title>
+                  <Paragraph>
+                    算符是否“激活”取决于环境驱动力：
+                  </Paragraph>
+                  <ul>
+                    <li><Tag color="red">电压驱动</Tag>: 当电势低于 LUMO（负极还原）或高于 HOMO（正极氧化）时，激活电子转移算符。</li>
+                    <li><Tag color="orange">热驱动</Tag>: 高温可激活高能垒的键断裂反应（如 C-F 键断裂）。</li>
+                    <li><Tag color="blue">自由基驱动</Tag>: 一旦生成高活性自由基（如 H•, F•），立即激活链式反应算符。</li>
+                  </ul>
                 </div>
               </Col>
-              <Col xs={24} sm={12} lg={8}>
-                <div className="feature-item">
-                  <div className="feature-item-icon" style={{ background: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' }}>
-                    <RocketOutlined />
-                  </div>
-                  <Title level={4}>自动化计算</Title>
-                  <Paragraph>
-                    一键提交分子动力学模拟任务，系统自动生成 LAMMPS 输入文件、调度 HPC 资源、执行计算并返回结果。
-                  </Paragraph>
+
+              <Col xs={24} lg={12}>
+                <div className="feature-item" style={{ height: '100%' }}>
+                  <Title level={4}>结果应用：该看什么？</Title>
+                  <Timeline
+                    items={[
+                      {
+                        color: 'green',
+                        children: (
+                          <>
+                            <Text strong>第一代产物 (Gen 1):</Text>
+                            <p>通常是直接的氧化/还原产物。例如 EC 得到双电子还原生成 LEDC (Li2CO3前体)。这决定了 SEI 的主要骨架。</p>
+                          </>
+                        ),
+                      },
+                      {
+                        color: 'red',
+                        children: (
+                          <>
+                            <Text strong>终端产物 (Thermodynamic Sinks):</Text>
+                            <p>只有热力学极度稳定的产物才会累积，如 <Text strong>LiF, Li2CO3, Li2O</Text>。这些无机成分含量越高，通常意味着界面膜越致密、更稳定。</p>
+                          </>
+                        ),
+                      },
+                      {
+                        color: 'gray',
+                        children: (
+                          <>
+                            <Text strong>气体释放:</Text>
+                            <p>关注路径中是否生成 CO2, C2H4, H2 等小分子气体。这是电池胀气和安全性评估的重要指标。</p>
+                          </>
+                        ),
+                      },
+                    ]}
+                  />
                 </div>
               </Col>
-              <Col xs={24} sm={12} lg={8}>
-                <div className="feature-item">
-                  <div className="feature-item-icon" style={{ background: 'linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)' }}>
-                    <LineChartOutlined />
-                  </div>
-                  <Title level={4}>结果分析</Title>
+            </Row>
+
+            <div style={{ marginTop: 24 }}>
+              <Title level={4}><SettingOutlined /> 完整操作流程</Title>
+              <Collapse accordion>
+                <Panel header="🎯 Step 1: 任务配置" key="1">
+                  <Title level={5}>1.1 电极类型选择</Title>
+                  <Table
+                    size="small"
+                    dataSource={[
+                      { key: '1', electrode: 'Anode (负极)', voltage: '0.01-0.5 V', env: 'Li+ + e⁻ 还原', target: 'SEI 膜成分预测' },
+                      { key: '2', electrode: 'Cathode (正极)', voltage: '4.3-4.8 V', env: '氧化环境 + 金属离子催化', target: 'CEI 膜、气体释放' },
+                      { key: '3', electrode: 'Bulk (本体)', voltage: '任意', env: '热分解', target: '高温稳定性' },
+                    ]}
+                    columns={[
+                      { title: '电极', dataIndex: 'electrode', key: 'electrode' },
+                      { title: '电压范围', dataIndex: 'voltage', key: 'voltage' },
+                      { title: '反应环境', dataIndex: 'env', key: 'env' },
+                      { title: '研究目标', dataIndex: 'target', key: 'target' },
+                    ]}
+                    pagination={false}
+                  />
+                  <Title level={5} style={{ marginTop: 16 }}>1.2 关键参数设置</Title>
                   <Paragraph>
-                    自动计算 RDF（径向分布函数）、MSD（均方位移）等关键参数，可视化展示离子溶剂化结构和传输性能。
+                    <ul>
+                      <li><Text strong>代数 (Generations)</Text>:
+                        <br />• Gen 1-2: 初级产物 (单体、自由基)
+                        <br />• Gen 3: 二聚体、环状产物 (推荐)
+                        <br />• Gen 4+: 计算量爆炸，仅用于特殊研究
+                      </li>
+                      <li><Text strong>温度</Text>:
+                        <br />• 298 K: 常温循环
+                        <br />• 333 K: 高温存储 (加速老化)
+                        <br />• 353-373 K: 热失控预警
+                      </li>
+                      <li><Text strong>溶剂/盐选择</Text>:
+                        <br />• 必须与 MD 模拟保持一致
+                        <br />• 可添加添加剂 (如 VC, FEC) 研究协同效应
+                      </li>
+                    </ul>
                   </Paragraph>
-                </div>
+                </Panel>
+
+                <Panel header="🔬 Step 2: 结果解读策略" key="2">
+                  <Title level={5}>2.1 反应网络图分析</Title>
+                  <Paragraph>
+                    <Text strong>优先关注:</Text>
+                    <ul>
+                      <li>节点大小 = 产物浓度 → 找最大的几个节点</li>
+                      <li>边的粗细 = 反应速率 → 主要反应路径</li>
+                      <li>颜色编码:
+                        <br />• 绿色: 稳定产物 (LiF, Li2CO3)
+                        <br />• 红色: 气体 (CO2, C2H4) - 安全隐患
+                        <br />• 黄色: 中间体 (可能继续反应)
+                      </li>
+                    </ul>
+                  </Paragraph>
+                  <Title level={5}>2.2 关键产物识别</Title>
+                  <Paragraph>
+                    <Text strong>SEI 膜优质指标:</Text>
+                    <ul>
+                      <li>✓ LiF 含量 &gt;30%: 高机械强度</li>
+                      <li>✓ Li2CO3 / LEDC: 离子传导性</li>
+                      <li>✓ 有机聚合物 (PVDF 类): 柔韧性</li>
+                      <li>✗ 气体产率 &gt;10%: 胀气风险</li>
+                      <li>✗ 可溶性产物: 持续消耗电解液</li>
+                    </ul>
+                  </Paragraph>
+                </Panel>
+
+                <Panel header="📈 Step 3: 数据导出与应用" key="3">
+                  <Paragraph>
+                    <Text strong>可导出数据:</Text>
+                    <ul>
+                      <li>反应网络 JSON (用于机器学习)</li>
+                      <li>产物分布 CSV (绘制柱状图)</li>
+                      <li>SMILES 列表 (后续 QC 计算)</li>
+                    </ul>
+                  </Paragraph>
+                  <Paragraph>
+                    <Text strong>典型应用场景:</Text>
+                    <ul>
+                      <li>对比不同电解液配方的 SEI 成分差异</li>
+                      <li>筛选低产气配方 (电动汽车安全)</li>
+                      <li>预测添加剂的作用机制</li>
+                    </ul>
+                  </Paragraph>
+                </Panel>
+
+                <Panel header="⚠️ 常见错误与规避" key="4">
+                  <Paragraph>
+                    <Text type="danger" strong>错误 1: 电压设置不当</Text>
+                    <br />→ SEI 研究必须 &lt;0.8 V (否则无还原反应)
+                    <br />→ CEI 研究必须 &gt;4.2 V (否则无氧化反应)
+                  </Paragraph>
+                  <Paragraph>
+                    <Text type="danger" strong>错误 2: 代数过高</Text>
+                    <br />→ Gen 5+ 会产生数千种产物，难以分析
+                    <br />→ 且高代产物通常浓度极低 (&lt;0.1%)
+                  </Paragraph>
+                  <Paragraph>
+                    <Text type="danger" strong>错误 3: 忽略溶剂效应</Text>
+                    <br />→ 不同溶剂会显著改变反应路径
+                    <br />→ 必须用实际电解液配方，不能只算单一溶剂
+                  </Paragraph>
+                </Panel>
+              </Collapse>
+            </div>
+          </Card>
+        </section>
+
+        {/* Module 3: Quantum Chemistry */}
+        <section id="qc-calc" className="guide-section">
+          <div className="section-header">
+            <div className="section-icon"><ThunderboltOutlined /></div>
+            <Title level={2}>量子化学计算 (QC)</Title>
+          </div>
+          <Card className="guide-card">
+            <Paragraph>
+              通过求解薛定谔方程（基于 DFT 近似），获得分子的电子结构。这是理解电解液氧化还原稳定性的基石。
+            </Paragraph>
+            <Row gutter={24}>
+              <Col span={8}>
+                <Card title="HOMO & LUMO" size="small" className="feature-item">
+                  <div style={{ textAlign: 'center', marginBottom: 16 }}>
+                    <div style={{ height: 4, width: '100%', background: '#ff4d4f', marginBottom: 4 }}></div>
+                    <Text type="secondary">LUMO (易得电子)</Text>
+                    <div style={{ margin: '12px 0', fontSize: 24 }}>⚡ Energy Gap</div>
+                    <Text type="secondary">HOMO (易失电子)</Text>
+                    <div style={{ height: 4, width: '100%', background: '#1890ff', marginTop: 4 }}></div>
+                  </div>
+                  <Paragraph>
+                    <Text strong>HOMO 能级低</Text> &rarr; 抗氧化能力强 &rarr; 适合高压正极。
+                    <br />
+                    <Text strong>LUMO 能级高</Text> &rarr; 抗还原能力强 &rarr; 在负极稳定。
+                  </Paragraph>
+                </Card>
               </Col>
-              <Col xs={24} sm={12} lg={8}>
-                <div className="feature-item">
-                  <div className="feature-item-icon" style={{ background: 'linear-gradient(135deg, #9f7aea 0%, #764ba2 100%)' }}>
-                    <AimOutlined />
-                  </div>
-                  <Title level={4}>智能原子映射</Title>
+              <Col span={8}>
+                <Card title="静电势 (ESP)" size="small" className="feature-item">
                   <Paragraph>
-                    自动识别分子中的原子类型和化学环境，精确区分不同分子中的同类原子（如 EC 的羰基氧与醚氧）。
+                    ESP 映射图显示了分子表面的电荷分布。
+                    <br /><br />
+                    <Text strong>红色区域 (负电)</Text>: 易吸引 Li+，是配位位点（如 EC 的羰基氧）。
+                    <br />
+                    <Text strong>蓝色区域 (正电)</Text>: 易受亲核试剂攻击（如 F- 进攻）。
                   </Paragraph>
-                </div>
+                </Card>
               </Col>
-              <Col xs={24} sm={12} lg={8}>
-                <div className="feature-item">
-                  <div className="feature-item-icon" style={{ background: 'linear-gradient(135deg, #f56565 0%, #c53030 100%)' }}>
-                    <SafetyCertificateOutlined />
-                  </div>
-                  <Title level={4}>数据复用</Title>
-                  <Paragraph>
-                    所有计算结果自动存入公共数据库，相同配方可直接查询历史结果，避免重复计算，节省资源。
-                  </Paragraph>
-                </div>
-              </Col>
-              <Col xs={24} sm={12} lg={8}>
-                <div className="feature-item">
-                  <div className="feature-item-icon" style={{ background: 'linear-gradient(135deg, #38b2ac 0%, #2c7a7b 100%)' }}>
-                    <BulbOutlined />
-                  </div>
-                  <Title level={4}>多精度模式</Title>
-                  <Paragraph>
-                    支持快速（~1h）、标准（~12h）、精确（~36h）三种计算模式，满足不同场景的精度和时效需求。
-                  </Paragraph>
-                </div>
+              <Col span={8}>
+                <Card title="计算建议" size="small" className="theory-card">
+                  <Title level={5}>方法选择</Title>
+                  <p><Text code>B3LYP/6-31G*</Text>:
+                    <br />性价比之王，适合快速筛选几百个分子。</p>
+                  <p><Text code>M06-2X/def2-TZVP</Text>:
+                    <br />描述弱相互作用（如 π-π 堆积）更准确，计算反应能时推荐使用。</p>
+                  <p><Text code>wB97X-D</Text>:
+                    <br />包含色散校正，精度最高，但耗时较长。</p>
+                </Card>
               </Col>
             </Row>
           </Card>
         </section>
 
-        {/* 分子动力学原理 */}
-        <section id="md-theory" className="guide-section">
+        {/* Module 4: Post-Process */}
+        <section id="post-process" className="guide-section">
           <div className="section-header">
-            <div className="section-icon"><ExperimentOutlined /></div>
-            <Title level={2}>分子动力学原理</Title>
+            <div className="section-icon"><ClusterOutlined /></div>
+            <Title level={2}>数据后处理 (Post-Processing)</Title>
           </div>
-
           <Card className="guide-card">
-            <Title level={3}>📚 什么是分子动力学模拟？</Title>
-            <Paragraph className="guide-paragraph">
-              分子动力学（Molecular Dynamics, MD）模拟是一种通过数值求解牛顿运动方程来研究原子和分子运动的计算方法。
-              通过追踪每个粒子的位置和速度随时间的演化，我们可以获得体系的微观结构和动力学性质。
-            </Paragraph>
-
-            <div className="theory-card">
-              <Title level={4}>🔬 基本原理</Title>
-              <Paragraph>
-                在 MD 模拟中，每个原子被视为一个经典粒子，其运动遵循牛顿第二定律：
-              </Paragraph>
-              <div className="formula-box">
-                F = ma = -∇U(r)
-              </div>
-              <Paragraph>
-                其中 F 是原子受到的力，m 是原子质量，a 是加速度，U(r) 是势能函数。
-                通过力场参数（如 OPLS-AA）描述原子间的相互作用，包括键合作用（键伸缩、键角弯曲、二面角扭转）和非键合作用（范德华力、静电作用）。
-              </Paragraph>
-            </div>
-
-            <div className="theory-card">
-              <Title level={4}>⚡ 电解液模拟流程</Title>
-              <Paragraph>
-                本平台采用经典的两阶段平衡策略：
-              </Paragraph>
-              <ol style={{ lineHeight: 2, color: '#4a5568' }}>
-                <li><Text strong>NPT 平衡阶段</Text>：在恒温恒压条件下平衡体系密度（约 0.1-0.5 ns）</li>
-                <li><Text strong>NVT 产出阶段</Text>：在恒温恒容条件下采集轨迹用于分析（约 0.5-5 ns）</li>
-              </ol>
-              <Paragraph>
-                模拟使用 LAMMPS 软件包，力场参数由 LigParGen 生成（基于 OPLS-AA 力场），
-                电荷通过 CM1A 或 CM1A-LBCC 方法计算。
-              </Paragraph>
-            </div>
+            <Row gutter={[24, 24]}>
+              <Col xs={24} lg={12}>
+                <Title level={4}>去溶剂化能 (Desolvation Energy)</Title>
+                <div style={{ marginBottom: 16 }}>
+                  <Image
+                    src="/assets/desolvation_process.png"
+                    fallback="/assets/rdf_chart_blue.png"
+                    alt="Desolvation Process Diagram"
+                    style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '100%', maxHeight: 200, objectFit: 'cover' }}
+                  />
+                </div>
+                <Paragraph>
+                  <Text strong>物理意义:</Text>
+                  锂离子在嵌入电极（如石墨或硅负极）之前，必须先摆脱其溶剂化壳层的束缚。这个"脱衣"过程的能量代价即为去溶剂化能。
+                  <br />
+                  去溶剂化通常是低温下电池内阻的主要来源（占总阻抗的 60% 以上）。去溶剂化能越低，低温充电性能越好。
+                </Paragraph>
+                <div className="theory-card">
+                  <Title level={5}>两种计算模式详解</Title>
+                  <Paragraph>
+                    <Text strong>1. Stepwise (逐步脱溶剂机制)</Text>:
+                    <br />
+                    模拟锂离子逐个丢弃溶剂分子的过程。
+                    <div className="formula-box" style={{ margin: '8px 0', fontSize: 12 }}>
+                      Li(Sol)₄ &rarr; Li(Sol)₃ + Sol (&Delta;G₁) <br />
+                      Li(Sol)₃ &rarr; Li(Sol)₂ + Sol (&Delta;G₂)
+                    </div>
+                    通常最后一步（如配位数 2&rarr;1 或 3&rarr;2）能垒最高，是决速步。
+                  </Paragraph>
+                  <Paragraph>
+                    <Text strong>2. Full (完全脱溶剂)</Text>:
+                    <br />
+                    Li<sup>+</sup>(Solvent)<sub>n</sub> &rarr; Li<sup>+</sup> + n &times; Solvent
+                    <br />
+                    计算将离子完全剥离裸露所需的总能量。这反映了溶剂与离子的本征结合强度，常用于筛选新型高压溶剂（强结合=高氧化稳定性）。
+                  </Paragraph>
+                </div>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Card title="氧化还原电位与重组能 (Redox & Reorganization)" bordered={false} className="feature-item">
+                  <Row gutter={24} align="top">
+                    <Col span={24} style={{ marginBottom: 16 }}>
+                      <Paragraph>
+                        <Text strong>1. 氧化/还原电位 (Redox Potential)</Text>:
+                        <br />
+                        我们采用最高精度的 <Text strong>G4MP2</Text> 或 <Text strong>M06-2X</Text> 方法计算分子的绝热氧化/还原电位。
+                        <div className="formula-box" style={{ margin: '8px 0', fontSize: 13 }}>
+                          E_ox = (G(M⁺) - G(M)) / F - 1.4V
+                        </div>
+                        相比于简单的 HOMO/LUMO 能级，该方法考虑了溶剂化效应和构型弛豫，预测值与 CV 实验吻合度更高（误差 &lt; 0.2V）。
+                      </Paragraph>
+                      <Paragraph>
+                        <Text strong>2. 重组能 (Reorganization Energy, &lambda;)</Text>:
+                        <br />
+                        定义为电子转移过程中，分子因几何构型变化而消耗的能量。它是 <Text strong>Marcus 电子转移理论</Text> 的核心参数。
+                        <br />
+                        <ul>
+                          <li><Text strong>&lambda; 大 (如 EC, &gt;0.8 eV)</Text>: 结构变化剧烈，电子转移慢，阻抗高。</li>
+                          <li><Text strong>&lambda; 小 (如 芳香族分子, &lt;0.2 eV)</Text>: 结构刚性，电子转移极快，适合做添加剂或快充溶剂。</li>
+                        </ul>
+                      </Paragraph>
+                    </Col>
+                    <Col span={24} style={{ textAlign: 'center' }}>
+                      <Image
+                        src="/assets/redox_energy_diagram.png"
+                        alt="Marcus Theory Energy Diagram"
+                        style={{ borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', maxWidth: '80%', maxHeight: 250 }}
+                      />
+                    </Col>
+                  </Row>
+                </Card>
+              </Col>
+            </Row>
           </Card>
         </section>
 
-        {/* 使用流程 */}
-        <section id="workflow" className="guide-section">
-          <div className="section-header">
-            <div className="section-icon"><ArrowRightOutlined /></div>
-            <Title level={2}>使用流程</Title>
-          </div>
-
-          <Card className="guide-card">
-            <div className="workflow-steps">
-              <div className="workflow-step">
-                <div className="workflow-step-number">1</div>
-                <div className="workflow-step-content">
-                  <Title level={4}>注册登录</Title>
-                  <Paragraph>
-                    创建账号并登录平台。新用户将获得一定的免费计算配额，可在个人中心查看剩余资源。
-                  </Paragraph>
-                </div>
-              </div>
-              <div className="workflow-step">
-                <div className="workflow-step-number">2</div>
-                <div className="workflow-step-content">
-                  <Title level={4}>创建配方</Title>
-                  <Paragraph>
-                    在"配方管理"中创建电解液配方：选择阳离子、阴离子、溶剂组分，设置浓度和温度等参数。
-                    系统支持多种常见的锂电池电解液组分。
-                  </Paragraph>
-                </div>
-              </div>
-              <div className="workflow-step">
-                <div className="workflow-step-number">3</div>
-                <div className="workflow-step-content">
-                  <Title level={4}>提交计算</Title>
-                  <Paragraph>
-                    选择计算精度（快速/标准/精确），配置 Slurm 资源参数，一键提交任务。
-                    系统自动生成输入文件并调度到 HPC 集群执行。
-                  </Paragraph>
-                </div>
-              </div>
-              <div className="workflow-step">
-                <div className="workflow-step-number">4</div>
-                <div className="workflow-step-content">
-                  <Title level={4}>监控进度</Title>
-                  <Paragraph>
-                    在"计算任务"页面实时查看任务状态（排队中、运行中、已完成等），
-                    支持查看 Slurm 日志和计算进度。
-                  </Paragraph>
-                </div>
-              </div>
-              <div className="workflow-step">
-                <div className="workflow-step-number">5</div>
-                <div className="workflow-step-content">
-                  <Title level={4}>分析结果</Title>
-                  <Paragraph>
-                    任务完成后，进入详情页查看 RDF、MSD 等分析结果。
-                    支持选择不同的原子对进行 RDF 计算，可视化展示离子配位结构。
-                  </Paragraph>
-                </div>
-              </div>
-            </div>
-          </Card>
-        </section>
-
-        {/* 结果解读 */}
-        <section id="results" className="guide-section">
-          <div className="section-header">
-            <div className="section-icon"><LineChartOutlined /></div>
-            <Title level={2}>结果解读</Title>
-          </div>
-
-          <Row gutter={[24, 24]}>
-            <Col xs={24} lg={12}>
-              <Card className="result-card" styles={{ body: { padding: 0 } }}>
-                <div className="result-card-header rdf">
-                  <Title level={3}><AreaChartOutlined /> 径向分布函数 (RDF)</Title>
-                  <Paragraph>Radial Distribution Function, g(r)</Paragraph>
-                </div>
-                <div className="result-card-body">
-                  <Paragraph>
-                    RDF 描述了以某一原子为中心，在距离 r 处找到另一原子的概率密度。
-                    它是分析电解液微观结构的核心工具。
-                  </Paragraph>
-
-                  <Divider />
-
-                  <div className="result-item">
-                    <CheckCircleOutlined className="result-item-icon" />
-                    <div className="result-item-content">
-                      <Title level={5}>第一峰位置</Title>
-                      <Paragraph>
-                        表示最近邻原子的平均距离。例如 Li-O 的 RDF 第一峰约在 2.0 Å，
-                        反映锂离子与氧原子的配位距离。
-                      </Paragraph>
-                    </div>
-                  </div>
-
-                  <div className="result-item">
-                    <CheckCircleOutlined className="result-item-icon" />
-                    <div className="result-item-content">
-                      <Title level={5}>峰高与积分</Title>
-                      <Paragraph>
-                        峰高反映局部密度增强程度，对第一峰积分可得到配位数（Coordination Number），
-                        即锂离子第一溶剂化壳层中的配位原子数目。
-                      </Paragraph>
-                    </div>
-                  </div>
-
-                  <div className="result-item">
-                    <CheckCircleOutlined className="result-item-icon" />
-                    <div className="result-item-content">
-                      <Title level={5}>溶剂化结构</Title>
-                      <Paragraph>
-                        通过比较 Li 与不同氧原子（如 EC 羰基氧、DMC 醚氧、阴离子氧）的 RDF，
-                        可以分析锂离子的优先溶剂化行为。
-                      </Paragraph>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            </Col>
-
-            <Col xs={24} lg={12}>
-              <Card className="result-card" styles={{ body: { padding: 0 } }}>
-                <div className="result-card-header msd">
-                  <Title level={3}><DotChartOutlined /> 均方位移 (MSD)</Title>
-                  <Paragraph>Mean Square Displacement</Paragraph>
-                </div>
-                <div className="result-card-body">
-                  <Paragraph>
-                    MSD 描述粒子随时间的平均位移平方，是计算扩散系数的基础。
-                    通过 MSD 可以评估电解液的离子传输性能。
-                  </Paragraph>
-
-                  <Divider />
-
-                  <div className="result-item">
-                    <CheckCircleOutlined className="result-item-icon" style={{ color: '#48bb78' }} />
-                    <div className="result-item-content">
-                      <Title level={5}>扩散系数</Title>
-                      <Paragraph>
-                        根据 Einstein 关系：D = lim(t→∞) MSD / 6t，
-                        从 MSD 曲线的线性区斜率可计算扩散系数 D（单位：cm²/s）。
-                      </Paragraph>
-                    </div>
-                  </div>
-
-                  <div className="result-item">
-                    <CheckCircleOutlined className="result-item-icon" style={{ color: '#48bb78' }} />
-                    <div className="result-item-content">
-                      <Title level={5}>离子电导率</Title>
-                      <Paragraph>
-                        通过 Nernst-Einstein 方程，可从扩散系数估算离子电导率：
-                        σ = (F²/RT) × Σ(c_i × z_i² × D_i)，其中 c_i 是浓度，z_i 是电荷数。
-                      </Paragraph>
-                    </div>
-                  </div>
-
-                  <div className="result-item">
-                    <CheckCircleOutlined className="result-item-icon" style={{ color: '#48bb78' }} />
-                    <div className="result-item-content">
-                      <Title level={5}>迁移数</Title>
-                      <Paragraph>
-                        比较阳离子和阴离子的扩散系数，可计算锂离子迁移数：
-                        t⁺ = D_Li / (D_Li + D_anion)，迁移数越高表示锂离子传输效率越好。
-                      </Paragraph>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            </Col>
-          </Row>
-        </section>
-
-        {/* 常见问题 */}
-        <section id="faq" className="guide-section">
-          <div className="section-header">
-            <div className="section-icon"><QuestionCircleOutlined /></div>
-            <Title level={2}>常见问题</Title>
-          </div>
-
-          <Collapse
-            className="faq-collapse"
-            expandIconPosition="end"
-            items={[
-              {
-                key: '1',
-                label: '如何选择合适的计算精度？',
-                children: (
-                  <div>
-                    <Paragraph>
-                      <Text strong>快速模式（~1小时）</Text>：适合快速测试配方、调试参数，结果仅供参考。
-                    </Paragraph>
-                    <Paragraph>
-                      <Text strong>标准模式（~12小时）</Text>：适合一般研究使用，平衡精度和时间，满足大多数分析需求。
-                    </Paragraph>
-                    <Paragraph>
-                      <Text strong>精确模式（~36小时）</Text>：适合论文发表级别的研究，提供高精度的 RDF 和扩散系数数据。
-                    </Paragraph>
-                  </div>
-                ),
-              },
-              {
-                key: '2',
-                label: '任务一直排队怎么办？',
-                children: (
-                  <Paragraph>
-                    任务排队时间取决于 HPC 集群的负载情况。如果长时间排队，可以尝试：
-                    1) 选择负载较低的计算队列；
-                    2) 减少请求的 CPU 核心数；
-                    3) 在非高峰时段（如夜间）提交任务。
-                  </Paragraph>
-                ),
-              },
-              {
-                key: '3',
-                label: 'RDF 曲线为什么有振荡？',
-                children: (
-                  <Paragraph>
-                    RDF 曲线的振荡反映了溶剂化壳层结构。第一个峰对应第一溶剂化壳层，
-                    后续的峰表示更远处的溶剂化壳层。在液态体系中，长程结构逐渐消失，
-                    g(r) 趋近于 1。如果振荡异常剧烈或不收敛到 1，可能需要增加模拟时间。
-                  </Paragraph>
-                ),
-              },
-              {
-                key: '4',
-                label: '如何解读负的 MSD 斜率？',
-                children: (
-                  <Paragraph>
-                    物理上 MSD 应该是单调递增的。如果观察到负斜率，可能是：
-                    1) 统计采样不足，需要更长的模拟时间；
-                    2) 体系未充分平衡，NPT 阶段时间不够；
-                    3) 分析的时间窗口选择不当。建议使用更长的 NVT 产出阶段。
-                  </Paragraph>
-                ),
-              },
-              {
-                key: '5',
-                label: '支持哪些溶剂和盐类？',
-                children: (
-                  <Paragraph>
-                    目前支持常见的锂电池电解液组分：
-                    <br /><Text strong>溶剂</Text>：EC、DMC、EMC、DEC、PC、FEC 等碳酸酯类溶剂
-                    <br /><Text strong>阳离子</Text>：Li⁺、Na⁺、K⁺、Mg²⁺ 等
-                    <br /><Text strong>阴离子</Text>：FSI⁻、TFSI⁻、PF₆⁻、BF₄⁻、ClO₄⁻ 等
-                    <br />如需添加新的分子，请联系管理员。
-                  </Paragraph>
-                ),
-              },
-              {
-                key: '6',
-                label: '如何引用本平台？',
-                children: (
-                  <Paragraph>
-                    如果您在研究中使用了本平台的计算结果，请在论文中引用：
-                    <br /><br />
-                    <Text code>
-                      Molyte Platform: A Web-based Molecular Dynamics Simulation Platform for Battery Electrolytes.
-                      https://molyte.example.com
-                    </Text>
-                  </Paragraph>
-                ),
-              },
-            ]}
-          />
-        </section>
-
-        {/* 底部 CTA */}
-        <section className="guide-section">
-          <Card className="guide-card" style={{ textAlign: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
-            <Title level={3} style={{ color: '#fff', marginBottom: 16 }}>
-              准备好开始您的研究了吗？
-            </Title>
-            <Paragraph style={{ color: 'rgba(255,255,255,0.9)', marginBottom: 24, fontSize: 16 }}>
-              立即注册，获取免费计算配额，体验高效的电解液模拟平台
-            </Paragraph>
-            <Space size={16}>
-              {isAuthenticated ? (
-                <Button
-                  size="large"
-                  onClick={() => navigate('/workspace/dashboard')}
-                  style={{ borderRadius: 8, fontWeight: 500 }}
-                >
-                  进入工作台
-                </Button>
-              ) : (
-                <>
-                  <Button
-                    size="large"
-                    onClick={() => navigate('/login?tab=register')}
-                    style={{ borderRadius: 8, fontWeight: 500 }}
-                  >
-                    免费注册
-                  </Button>
-                  <Button
-                    size="large"
-                    type="default"
-                    ghost
-                    onClick={() => navigate('/login')}
-                    style={{ borderRadius: 8, fontWeight: 500 }}
-                  >
-                    登录
-                  </Button>
-                </>
-              )}
-            </Space>
-          </Card>
-        </section>
+        {/* Footer */}
+        <footer className="guide-footer" style={{ textAlign: 'center', marginTop: 48, color: '#8c8c8c' }}>
+          Molyte Science Team &copy; 2025 | 基于第一性原理与数据驱动的材料研发
+        </footer>
       </main>
-
-      {/* 页脚 */}
-      <footer style={{
-        background: '#1a1f36',
-        padding: '32px 24px',
-        textAlign: 'center',
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 14,
-      }}>
-        © 2025 Molyte Platform. All rights reserved.
-      </footer>
     </div>
   );
 }
-

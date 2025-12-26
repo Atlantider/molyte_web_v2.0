@@ -78,6 +78,7 @@ export default function Layout() {
     if (path.startsWith('/workspace/liquid-electrolyte/qc')) return '/workspace/liquid-electrolyte/qc';
     if (path.startsWith('/workspace/liquid-electrolyte/ai-discovery')) return '/workspace/liquid-electrolyte/ai-discovery';
     if (path.startsWith('/workspace/liquid-electrolyte/anion-generation')) return '/workspace/liquid-electrolyte/anion-generation';
+    if (path.startsWith('/workspace/liquid-electrolyte/reaction-network')) return '/workspace/liquid-electrolyte/reaction-network';
     if (path.startsWith('/workspace/liquid-electrolyte/md') || path.startsWith('/workspace/liquid-electrolyte')) return '/workspace/liquid-electrolyte/md';
 
     // 旧路由兼容
@@ -114,8 +115,8 @@ export default function Layout() {
       keys.push('/workspace/admin');
     }
     if (path.startsWith('/workspace/liquid-electrolyte') ||
-        path.startsWith('/workspace/jobs') ||
-        path.startsWith('/workspace/qc-jobs')) {
+      path.startsWith('/workspace/jobs') ||
+      path.startsWith('/workspace/qc-jobs')) {
       keys.push('/workspace/liquid-electrolyte');
     }
     // 账户中心不需要子菜单展开（单一页面）
@@ -182,6 +183,11 @@ export default function Layout() {
           key: '/workspace/liquid-electrolyte/ai-discovery',
           icon: <ClusterOutlined />,
           label: '溶元AI推荐',
+        }] : []),
+        ...(hasModuleAccess('reaction-network') || true ? [{
+          key: '/workspace/liquid-electrolyte/reaction-network',
+          icon: <ClusterOutlined />,
+          label: '溶盐反应网络',
         }] : []),
       ],
     },

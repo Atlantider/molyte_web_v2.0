@@ -74,6 +74,7 @@ class CEIChemistryIntegrator:
     def __init__(self,
                  electrode_type: str = 'anode',
                  cathode_material: str = 'NMC',
+                 anode_material: str = 'GRAPHITE',
                  voltage: float = 3.7,
                  include_peroxide: bool = True,
                  include_superoxide: bool = True,
@@ -106,6 +107,7 @@ class CEIChemistryIntegrator:
         self.species_injector = ElectrodeSpeciesInjector(
             electrode_type=electrode_type,
             cathode_material=cathode_material,
+            anode_material=anode_material,
             voltage=voltage,
             include_peroxide=include_peroxide,
             include_superoxide=include_superoxide,
@@ -240,6 +242,7 @@ def integrate_cei_chemistry(
     initial_smiles: List[str],
     electrode_type: str = 'anode',
     cathode_material: str = 'NMC',
+    anode_material: str = 'GRAPHITE',
     voltage: float = 3.7,
     include_peroxide: bool = True,
     include_superoxide: bool = True,
@@ -263,6 +266,7 @@ def integrate_cei_chemistry(
     integrator = CEIChemistryIntegrator(
         electrode_type=electrode_type,
         cathode_material=cathode_material,
+        anode_material=anode_material,
         voltage=voltage,
         include_peroxide=include_peroxide,
         include_superoxide=include_superoxide,

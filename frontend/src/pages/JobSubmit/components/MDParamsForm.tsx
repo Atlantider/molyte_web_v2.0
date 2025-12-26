@@ -2,9 +2,10 @@
  * MD参数配置表单组件
  */
 import React from 'react';
-import { Card, Form, Input, InputNumber, Row, Col, Space, Tag, Button } from 'antd';
-import { EditOutlined } from '@ant-design/icons';
-import type { MDJob } from '../../types';
+import { Form, InputNumber, Select, Row, Col, Typography, Card, Space, Alert, Tag, Button, Input } from 'antd';
+import { InfoCircleOutlined, EditOutlined } from '@ant-design/icons';
+import AccuracyLevelSelector from '../../../components/AccuracyLevelSelector';
+import type { MDJob, MDJobCreate } from '../../../types';
 
 interface MDParamsFormProps {
     job: MDJob;

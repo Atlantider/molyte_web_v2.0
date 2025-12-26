@@ -5,9 +5,10 @@
  * 将以下路由添加到你的主路由配置文件中（通常是 App.tsx 或 routes.tsx）
  */
 
-import ReactionNetworkJobs from './pages/ReactionNetworkJobs';
-import ReactionNetworkCreate from './pages/ReactionNetworkCreate';
-import ReactionNetworkDetail from './pages/ReactionNetworkDetail';
+import { ExperimentOutlined } from '@ant-design/icons';
+import ReactionNetworkJobs from '../pages/ReactionNetworkJobs';
+import ReactionNetworkCreate from '../pages/ReactionNetworkCreate';
+import ReactionNetworkDetail from '../pages/ReactionNetworkDetail';
 
 // 在路由配置中添加以下路由：
 const reactionNetworkRoutes = [

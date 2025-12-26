@@ -1562,7 +1562,7 @@ export default function PostProcessDetail() {
                   </Descriptions.Item>
                   <Descriptions.Item label="溶剂模型">
                     <Tag color="orange">
-                      {qcConfig.solvent_model === 'gas' ? '气相' : `${qcConfig.solvent_model.toUpperCase()}/${qcConfig.solvent}`}
+                      {qcConfig.solvent_model === 'gas' ? '气相' : `${qcConfig.solvent_model?.toUpperCase() || ''}/${qcConfig.solvent}`}
                     </Tag>
                   </Descriptions.Item>
                   <Descriptions.Item label="色散校正">

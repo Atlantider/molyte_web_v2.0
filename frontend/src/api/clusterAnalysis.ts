@@ -39,6 +39,10 @@ export interface QCConfig {
   slurm_time?: number;
   // QC 引擎
   qc_engine?: string;
+
+  // 自定义溶剂参数
+  custom_eps?: number;
+  custom_eps_inf?: number;
 }
 
 export interface PlannedQCTask {

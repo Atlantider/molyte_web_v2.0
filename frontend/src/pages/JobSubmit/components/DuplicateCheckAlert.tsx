@@ -4,7 +4,7 @@
 import React from 'react';
 import { Alert } from 'antd';
 import { CheckCircleOutlined } from '@ant-design/icons';
-import type { DuplicateCheckResponse } from '../../api/qc';
+import type { DuplicateCheckResponse } from '../../../api/qc';
 
 interface DuplicateCheckAlertProps {
     result: DuplicateCheckResponse | null;

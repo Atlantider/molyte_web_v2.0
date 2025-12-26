@@ -2,6 +2,10 @@
  * JobSubmit 主组件类型定义
  */
 
+import type { MDJob, ElectrolyteSystem } from '../../types';
+import type { PartitionInfo } from '../../api/slurm';
+import type { DuplicateCheckResponse } from '../../api/qc';
+
 export interface QCMoleculeParams {
     functional: string;
     basis_set: string;

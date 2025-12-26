@@ -9,7 +9,7 @@
 """
 from pydantic_settings import BaseSettings
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict
 import os
 import logging
 
@@ -87,7 +87,7 @@ class PathSettings(BaseSettings):
         job_type: JobType,
         job_id: str,
         status: JobStatus = "active"
-    ) -> dict[str, Path]:
+    ) -> Dict[str, Path]:
         """
         创建完整的任务目录结构
         

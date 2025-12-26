@@ -327,11 +327,6 @@ const ReactionNetworkViewer: React.FC = () => {
                     d3VelocityDecay={0.3}
                     warmupTicks={100}
                     cooldownTicks={0}
-                    linkDistance={linkDistance}
-                    d3Force={{
-                        charge: { strength: chargeStrength },
-                        center: { x: 0, y: 0 }
-                    }}
                 />
             </div>
 

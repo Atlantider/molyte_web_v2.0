@@ -2,10 +2,10 @@
  * Slurm配置面板组件
  */
 import React from 'react';
-import { Card, Form, Select, InputNumber, Row, Col, Space, Tag, Button, Tooltip } from 'antd';
-import { BulbOutlined, SyncOutlined } from '@ant-design/icons';
-import type { PartitionInfo } from '../../api/slurm';
-import type { MDJob } from '../../types';
+import { Form, InputNumber, Select, Row, Col, Card, Tooltip, Space, Typography, Tag, Button } from 'antd';
+import { CloudServerOutlined, InfoCircleOutlined, BulbOutlined } from '@ant-design/icons';
+import type { PartitionInfo } from '../../../api/slurm';
+import type { MDJob } from '../../../types';
 
 interface SlurmConfigPanelProps {
     job: MDJob;

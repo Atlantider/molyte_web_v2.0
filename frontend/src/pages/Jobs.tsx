@@ -652,13 +652,13 @@ export default function Jobs() {
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <Title level={2} style={{ margin: 0, marginBottom: 8 }}>
+            <Title level={2} className="job-management-title" style={{ margin: 0, marginBottom: 8 }}>
               <RocketOutlined style={{ marginRight: 12, color: token.colorPrimary }} />
               计算任务管理
             </Title>
             <Space>
-              <Text type="secondary">管理分子动力学模拟任务，监控计算进度</Text>
-              <Text type="secondary">|</Text>
+              <Text className="job-management-desc">管理分子动力学模拟任务，监控计算进度</Text>
+              <Text className="job-management-desc">|</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 最后更新: {lastRefresh.toLocaleTimeString()}
                 {hasActiveJobs() && <Text type="success" style={{ marginLeft: 8 }}>(自动刷新中)</Text>}
@@ -711,7 +711,7 @@ export default function Jobs() {
               }}>
                 {jobs.length}
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>全部任务</Text>
+              <Text className="kpi-card-text" style={{ fontSize: 12 }}>全部任务</Text>
             </div>
           </Col>
           <Col>
@@ -724,7 +724,7 @@ export default function Jobs() {
               }}>
                 {createdCount}
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>待配置</Text>
+              <Text className="kpi-card-text" style={{ fontSize: 12 }}>待配置</Text>
             </div>
           </Col>
           <Col>
@@ -737,7 +737,7 @@ export default function Jobs() {
               }}>
                 {runningCount}
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>运行中</Text>
+              <Text className="kpi-card-text" style={{ fontSize: 12 }}>运行中</Text>
             </div>
           </Col>
           <Col>
@@ -750,7 +750,7 @@ export default function Jobs() {
               }}>
                 {completedCount}
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>已完成</Text>
+              <Text className="kpi-card-text" style={{ fontSize: 12 }}>已完成</Text>
             </div>
           </Col>
           <Col>
@@ -763,7 +763,7 @@ export default function Jobs() {
               }}>
                 {failedCount}
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>失败/取消</Text>
+              <Text className="kpi-card-text" style={{ fontSize: 12 }}>失败/取消</Text>
             </div>
           </Col>
         </Row>
@@ -1233,6 +1233,8 @@ export default function Jobs() {
                 onChange={(value) => {
                   setSelectedAccuracyLevel(value);
                   form.setFieldsValue({ accuracy_level: value });
+
+                  const defaults = accuracyDefaults?.[value];
                   if (defaults) {
                     form.setFieldsValue({
                       charge_method: defaults.charge_method,

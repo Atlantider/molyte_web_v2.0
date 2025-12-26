@@ -1,0 +1,303 @@
+.pricing-config-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    min-height: 100vh;
+}
+
+.pricing-config-header {
+    text-align: center;
+    margin-bottom: 3rem;
+    padding: 2rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 20px;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pricing-config-header h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+}
+
+.subtitle {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 1.1rem;
+}
+
+.loading-spinner {
+    text-align: center;
+    padding: 4rem;
+    font-size: 1.5rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.message-banner {
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    font-weight: 500;
+    animation: slideIn 0.3s ease-out;
+}
+
+.message-banner.success {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid rgba(16, 185, 129, 0.5);
+    color: #10b981;
+}
+
+.message-banner.error {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    color: #ef4444;
+}
+
+.config-section {
+    margin-bottom: 3rem;
+}
+
+.section-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.section-header h2 {
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.5rem;
+}
+
+.section-desc {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.95rem;
+}
+
+/* 任务类型单价网格 */
+.pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+}
+
+.pricing-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+}
+
+.pricing-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+    border-color: rgba(102, 126, 234, 0.5);
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.task-icon {
+    font-size: 2rem;
+}
+
+.card-header h3 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.price-input-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    border: 2px solid rgba(102, 126, 234, 0.3);
+    transition: border-color 0.3s ease;
+}
+
+.price-input-group:focus-within {
+    border-color: rgba(102, 126, 234, 0.8);
+}
+
+.currency {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #667eea;
+}
+
+.price-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1.5rem;
+    font-weight: 700;
+    outline: none;
+    width: 100%;
+}
+
+.price-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.unit {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.9rem;
+}
+
+/* 用户类型折扣网格 */
+.discount-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+.discount-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+}
+
+.discount-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(118, 75, 162, 0.3);
+    border-color: rgba(118, 75, 162, 0.5);
+}
+
+.user-icon {
+    font-size: 2rem;
+}
+
+.discount-input-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.discount-input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.3);
+    border: 2px solid rgba(118, 75, 162, 0.3);
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    color: #fff;
+    font-size: 1.3rem;
+    font-weight: 700;
+    outline: none;
+    transition: border-color 0.3s ease;
+}
+
+.discount-input:focus {
+    border-color: rgba(118, 75, 162, 0.8);
+}
+
+.discount-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.discount-display {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    min-width: 80px;
+}
+
+.discount-percent {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #764ba2;
+}
+
+.discount-label {
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 0.25rem;
+}
+
+/* 说明信息 */
+.info-section {
+    margin-top: 3rem;
+}
+
+.info-card {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 16px;
+    padding: 1.5rem;
+}
+
+.info-card h3 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #60a5fa;
+    margin-bottom: 1rem;
+}
+
+.info-card ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.info-card li {
+    padding: 0.5rem 0;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1.6;
+    position: relative;
+    padding-left: 1.5rem;
+}
+
+.info-card li::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    color: #60a5fa;
+    font-weight: bold;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .pricing-config-container {
+        padding: 1rem;
+    }
+
+    .pricing-config-header h1 {
+        font-size: 2rem;
+    }
+
+    .pricing-grid,
+    .discount-grid {
+        grid-template-columns: 1fr;
+    }
+}

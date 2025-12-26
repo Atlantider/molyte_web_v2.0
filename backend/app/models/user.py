@@ -30,6 +30,12 @@ class AccountType(str, enum.Enum):
     SUB_ACCOUNT = "sub_account"        # 子账号
 
 
+class BillingMode(str, enum.Enum):
+    """Billing mode enumeration - 计费模式"""
+    CORE_HOUR = "CORE_HOUR"    # 按核时计费（默认）
+    TASK_TYPE = "TASK_TYPE"    # 按任务类型计费
+
+
 class User(Base):
     """User model"""
     __tablename__ = "users"
@@ -102,6 +108,10 @@ class User(Base):
     can_use_gaussian = Column(Boolean, default=False, nullable=False)  # 是否允许使用Gaussian(需license)
     
     custom_cpu_hour_price = Column(Float, nullable=True)  # 自定义核时单价
+    billing_mode = Column(String(20), default=BillingMode.CORE_HOUR.value, nullable=False,
+        comment="计费模式: CORE_HOUR=按核时, TASK_TYPE=按任务类型")
+    custom_task_prices = Column(JSON, nullable=True,
+        comment="自定义任务价格: {MD: 10.0, QC: 50.0, ...}")
     price_updated_at = Column(DateTime(timezone=True), nullable=True)  # 定价最后更新时间
     price_updated_by = Column(Integer, nullable=True)  # 更新定价的管理员 ID
 

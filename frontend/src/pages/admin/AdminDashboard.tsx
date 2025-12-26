@@ -119,11 +119,11 @@ const AdminDashboard: React.FC = () => {
     <div style={{ padding: '20px 24px', background: token.colorBgLayout, minHeight: 'calc(100vh - 64px)' }}>
       {/* 页面标题 - 统一风格 */}
       <div style={{ marginBottom: 16 }}>
-        <Title level={3} style={{ margin: 0, marginBottom: 4 }}>
+        <Title level={3} className="admin-dashboard-title" style={{ margin: 0, marginBottom: 4 }}>
           <ControlOutlined style={{ marginRight: 10, color: token.colorPrimary }} />
           管理面板
         </Title>
-        <Text type="secondary">系统资源监控与用户管理</Text>
+        <Text className="admin-dashboard-desc">系统资源监控与用户管理</Text>
       </div>
 
       {/* Admin Navigation Menu */}
@@ -374,8 +374,8 @@ const AdminDashboard: React.FC = () => {
                         percent > 80
                           ? '#f5222d'
                           : percent > 50
-                          ? '#fa8c16'
-                          : '#52c41a'
+                            ? '#fa8c16'
+                            : '#52c41a'
                       }
                     />
                   </div>

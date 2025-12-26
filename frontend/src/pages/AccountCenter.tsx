@@ -139,7 +139,7 @@ const AccountCenter: React.FC = () => {
   // 获取配额状态
   const getQuotaStatus = () => {
     if (!quota) return { status: 'normal', color: '#52c41a' };
-    
+
     const available = quota.available_quota;
     if (available < 1) return { status: 'critical', color: '#ff4d4f' };
     if (available < 10) return { status: 'warning', color: '#faad14' };
@@ -333,8 +333,8 @@ const AccountCenter: React.FC = () => {
             showIcon
             style={{ marginBottom: 24 }}
             action={
-              <Button 
-                size="small" 
+              <Button
+                size="small"
                 type="primary"
                 onClick={() => setActiveTab('recharge')}
               >
@@ -355,12 +355,12 @@ const AccountCenter: React.FC = () => {
                   <Text type="secondary">{user?.email}</Text>
                 </div>
               </div>
-              
+
               <Divider />
-              
+
               <div style={{ marginBottom: 16 }}>
-                <Tag 
-                  icon={accountConfig.icon} 
+                <Tag
+                  icon={accountConfig.icon}
                   color={accountConfig.color}
                   style={{ width: '100%', textAlign: 'center', padding: '8px 0' }}
                 >
@@ -368,16 +368,39 @@ const AccountCenter: React.FC = () => {
                 </Tag>
               </div>
 
+              {/* 计费模式显示 */}
+              <div style={{
+                marginBottom: 16,
+                padding: '12px',
+                background: isDark ? 'rgba(255,255,255,0.04)' : '#f5f5f5',
+                borderRadius: 8
+              }}>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                  我的计费模式
+                </Text>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <DollarOutlined style={{ color: token.colorPrimary }} />
+                  <Text strong>
+                    {balance?.price_per_hour ? '按核时计费' : '按核时计费'}
+                  </Text>
+                </div>
+                {balance?.price_per_hour && (
+                  <Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>
+                    当前费率: ¥{balance.price_per_hour.toFixed(4)}/核时
+                  </Text>
+                )}
+              </div>
+
               <Space direction="vertical" style={{ width: '100%' }}>
-                <Button 
-                  block 
+                <Button
+                  block
                   icon={<SettingOutlined />}
                   onClick={() => setActiveTab('settings')}
                 >
                   账户设置
                 </Button>
-                <Button 
-                  block 
+                <Button
+                  block
                   icon={<HistoryOutlined />}
                   onClick={() => setActiveTab('statistics')}
                 >
@@ -389,13 +412,13 @@ const AccountCenter: React.FC = () => {
 
           {/* 配额状态卡片 */}
           <Col xs={24} lg={16}>
-            <Card 
-              title="配额状态" 
+            <Card
+              title="配额状态"
               extra={
                 <Space>
                   <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button>
-                  <Button 
-                    type="primary" 
+                  <Button
+                    type="primary"
                     icon={<WalletOutlined />}
                     onClick={() => setActiveTab('recharge')}
                   >
@@ -469,7 +492,7 @@ const AccountCenter: React.FC = () => {
                     <Progress
                       percent={Math.round(((quota.used_cpu_hours || 0) / (quota.total_cpu_hours || 1)) * 100)}
                       status={quotaStatus.status === 'critical' ? 'exception' :
-                             quotaStatus.status === 'warning' ? 'active' : 'success'}
+                        quotaStatus.status === 'warning' ? 'active' : 'success'}
                     />
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12 }}>
                       <Text type="secondary">

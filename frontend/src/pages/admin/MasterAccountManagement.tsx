@@ -380,10 +380,32 @@ const MasterAccountManagement: React.FC = () => {
       key: 'quota_usage',
       width: 220,
       render: (record: any) => {
-        const total = record.total_cpu_hours || 0;
-        const used = record.used_cpu_hours || 0;
         const balance = record.balance_cpu_hours || 0;
-        const usagePercent = total > 0 ? (used / total) * 100 : 0;
+        const total = record.total_cpu_hours || 0;
+
+        // 计算已使用核时: 总核时 - 当前余额
+        // 如果余额为负(欠费),则已使用 = 总核时 + |欠费|
+        const used = total - balance;
+
+        // 计算使用百分比
+        let usagePercent = 0;
+        let status: 'success' | 'normal' | 'exception' = 'success';
+
+        if (total > 0) {
+          usagePercent = (used / total) * 100;
+
+          // 确定状态
+          if (balance < 0) {
+            // 欠费状态
+            status = 'exception';
+          } else if (usagePercent > 90) {
+            status = 'exception';
+          } else if (usagePercent > 70) {
+            status = 'normal';
+          } else {
+            status = 'success';
+          }
+        }
 
         return (
           <div>
@@ -391,12 +413,17 @@ const MasterAccountManagement: React.FC = () => {
               <Progress
                 percent={Math.min(usagePercent, 100)}
                 size="small"
-                status={usagePercent > 90 ? 'exception' : usagePercent > 70 ? 'normal' : 'success'}
-                format={() => `${usagePercent.toFixed(2)}%`}
+                status={status}
+                format={() => `${usagePercent.toFixed(1)}%`}
               />
             </div>
             <div style={{ fontSize: '12px' }}>
-              <span style={{ color: '#52c41a', fontWeight: 'bold' }}>可用: {formatQuota(balance)}h</span>
+              <span style={{
+                color: balance >= 0 ? '#52c41a' : '#ff4d4f',
+                fontWeight: 'bold'
+              }}>
+                {balance >= 0 ? '可用' : '欠费'}: {formatQuota(Math.abs(balance))}h
+              </span>
               {' / '}
               <span style={{ color: '#ff4d4f' }}>已用: {formatQuota(used)}h</span>
               {' / '}

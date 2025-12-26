@@ -909,11 +909,11 @@ export default function Electrolytes() {
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <Title level={2} style={{ margin: 0, marginBottom: 8 }}>
+            <Title level={2} className="formula-management-title" style={{ margin: 0, marginBottom: 8 }}>
               <ExperimentOutlined style={{ marginRight: 12, color: '#1677ff' }} />
               配方管理
             </Title>
-            <Text type="secondary">创建和管理电解质配方，配置分子组成和模拟参数</Text>
+            <Text className="formula-management-desc">创建和管理电解质配方，配置分子组成和模拟参数</Text>
           </div>
           <Space>
             <Button

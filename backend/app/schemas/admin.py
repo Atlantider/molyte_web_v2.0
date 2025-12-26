@@ -4,7 +4,7 @@ Admin API schemas
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 from pydantic import BaseModel, EmailStr, Field
-from app.models.user import UserRole, UserType
+from app.models.user import UserRole, UserType, BillingMode
 
 
 # ============ User Management Schemas ============
@@ -30,6 +30,8 @@ class UserListItem(BaseModel):
     allowed_partitions: Optional[List[str]] = None
     allowed_modules: Optional[List[str]] = None
     custom_cpu_hour_price: Optional[float] = None
+    billing_mode: str = "CORE_HOUR"  # CORE_HOUR or TASK_TYPE
+    custom_task_prices: Optional[Dict[str, float]] = None
     last_login_at: Optional[datetime] = None
     created_at: datetime
 
@@ -58,6 +60,8 @@ class UserDetail(BaseModel):
     allowed_partitions: Optional[List[str]] = None
     allowed_modules: Optional[List[str]] = None
     custom_cpu_hour_price: Optional[float] = None
+    billing_mode: str = "CORE_HOUR"  # CORE_HOUR or TASK_TYPE
+    custom_task_prices: Optional[Dict[str, float]] = None
     last_login_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -95,6 +99,8 @@ class UserUpdate(BaseModel):
     allowed_partitions: Optional[List[str]] = None  # None means all partitions (admin only)
     allowed_modules: Optional[List[str]] = None  # None means all modules (admin only)
     custom_cpu_hour_price: Optional[float] = Field(None, ge=0.01, description="自定义核时单价（元/核时），为 null 时使用角色默认价格")
+    billing_mode: Optional[str] = Field(None, description="计费模式: CORE_HOUR 或 TASK_TYPE")
+    custom_task_prices: Optional[Dict[str, float]] = Field(None, description="自定义任务价格: {MD: 10.0, QC: 50.0}")
 
 
 class UserCreate(BaseModel):

@@ -2,9 +2,9 @@
 User schemas
 """
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
-from app.models.user import UserRole, AccountType, UserType
+from app.models.user import UserRole, AccountType, UserType, BillingMode
 import re
 
 

@@ -279,23 +279,138 @@ class BillingService:
         # 计算 MD 核时
         md_hours = job.actual_cpu_hours if job.actual_cpu_hours and job.actual_cpu_hours > 0 else 0.0
 
-        # 计算 RESP 核时
-        resp_hours = job.resp_cpu_hours if job.resp_cpu_hours and job.resp_cpu_hours > 0 else 0.0
-
         # 返回总核时
         total_hours = md_hours + resp_hours
         return total_hours
+    
+    @staticmethod
+    def get_pricing_mode(db: Session) -> str:
+        """
+        获取全局计费模式
+        
+        Returns:
+            'CORE_HOUR' 或 'TASK_TYPE'
+        """
+        try:
+            result = db.execute(
+                "SELECT pricing_mode FROM billing_config ORDER BY id DESC LIMIT 1"
+            ).first()
+            
+            if result:
+                return result[0]
+        except Exception as e:
+            logger.warning(f"Failed to get pricing mode: {e}")
+        
+        # 默认使用按核时计费
+        return 'CORE_HOUR'
+    
+    @staticmethod
+    def get_core_hour_price(db: Session, user_id: int) -> float:
+        """
+        获取核时单价(按核时计费模式使用)
+        
+        优先级:
+        1. 用户自定义价格
+        2. 全局核时单价
+        3. 默认值0.1
+        
+        Args:
+            db: 数据库会话
+            user_id: 用户ID
+            
+        Returns:
+            核时单价
+        """
+        # 1. 检查用户自定义价格
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.custom_cpu_hour_price is not None:
+            return float(user.custom_cpu_hour_price)
+        
+        # 2. 获取全局核时单价
+        try:
+            result = db.execute(
+                "SELECT global_core_hour_price FROM billing_config ORDER BY id DESC LIMIT 1"
+            ).first()
+            
+            if result and result[0] is not None:
+                return float(result[0])
+        except Exception as e:
+            logger.warning(f"Failed to get global core hour price: {e}")
+        
+        # 3. 默认值
+        return 0.1
+
+    @staticmethod
+    def get_discount_user_for_billing(
+        db: Session,
+        user: User,
+        cpu_hours: float
+    ) -> int:
+        """
+        确定应该使用谁的折扣率进行计费
+        
+        规则:
+        - 个人账号/主账号: 使用自己的折扣
+        - 子账号且个人余额充足: 使用自己的折扣
+        - 子账号且个人余额不足: 使用主账号的折扣
+        
+        Args:
+            db: 数据库会话
+            user: 用户对象
+            cpu_hours: 需要的核时数
+            
+        Returns:
+            应该使用折扣的用户ID
+        """
+        from app.models.organization_v2 import SubAccount
+        from app.models.user import AccountType
+        
+        # 非子账号,使用自己的折扣
+        if user.account_type != AccountType.SUB_ACCOUNT.value:
+            return user.id
+        
+        # 子账号: 判断个人余额是否充足
+        if user.balance_cpu_hours >= cpu_hours:
+            # 个人余额充足,使用自己的折扣
+            logger.info(f"Sub-account {user.id} using personal balance, applying own discount")
+            return user.id
+        else:
+            # 个人余额不足,需要使用主账号配额,使用主账号的折扣
+            sub_account = db.query(SubAccount).filter(
+                SubAccount.user_id == user.id
+            ).first()
+            
+            if sub_account and sub_account.master_account_id:
+                logger.info(f"Sub-account {user.id} using master account quota, applying master account discount")
+                return sub_account.master_account_id
+            else:
+                # 找不到主账号,降级使用自己的折扣
+                logger.warning(f"Sub-account {user.id} has no master account, using own discount")
+                return user.id
 
     @staticmethod
     def settle_job(db: Session, job: MDJob) -> Tuple[bool, str]:
         """
         任务完成后结算
-        1. 计算实际消耗机时
-        2. 从用户余额扣除
-        3. 余额不足则记录欠费并锁定结果
-        4. 更新用户使用统计
+        
+        防重复计费机制:
+        1. 检查billed标志
+        2. 使用数据库事务
+        3. 数据库唯一索引约束
+        
+        支持两种计费模式:
+        - CORE_HOUR: 按核时计费(统一单价)
+        - TASK_TYPE: 按任务类型计费(差异化定价)
         """
+        # ===== 防重复计费检查 =====
         if job.billed:
+            logger.warning(f"Job {job.id} already billed, skipping")
+            return True, "任务已结算"
+        
+        # 刷新job对象,确保获取最新状态
+        db.refresh(job)
+        if job.billed:
+            logger.warning(f"Job {job.id} already billed (after refresh), skipping")
             return True, "任务已结算"
 
         user = db.query(User).filter(User.id == job.user_id).first()
@@ -311,14 +426,44 @@ class BillingService:
         # 计算实际机时（包括 MD 核时和 RESP 核时）
         total_cpu_hours = BillingService.calculate_job_cpu_hours(job)
 
-        # 注意：不要覆盖 job.actual_cpu_hours 和 job.resp_cpu_hours
-        # 这两个字段由 Worker 从 Slurm 获取并上报，应该保持原值
-        # 这里只是用于计费的临时变量
+        # ===== 获取计费模式 =====
+        pricing_mode = BillingService.get_pricing_mode(db)
+        
+        # ===== 确定折扣用户(按配额来源) =====
+        discount_user_id = BillingService.get_discount_user_for_billing(
+            db, user, total_cpu_hours
+        )
+        
+        # ===== 根据计费模式计算费用 =====
+        from app.services.pricing_service import PricingService
+        
+        if pricing_mode == 'CORE_HOUR':
+            # 模式A: 按核时计费(统一单价)
+            base_price = BillingService.get_core_hour_price(db, user.id)
+            discount_rate = PricingService.get_user_discount_rate(db, discount_user_id)
+            final_cost = base_price * total_cpu_hours * discount_rate
+            task_price = base_price
+        else:
+            # 模式B: 按任务类型计费(差异化定价)
+            final_cost = PricingService.calculate_final_price(
+                db=db,
+                task_type='MD',
+                cpu_hours=total_cpu_hours,
+                user_id=discount_user_id
+            )
+            task_price = PricingService.get_task_type_price(db, 'MD')
+            discount_rate = PricingService.get_user_discount_rate(db, discount_user_id)
+        
+        # 记录配额来源
+        if discount_user_id != user.id:
+            quota_source = f"主账号#{discount_user_id}"
+        else:
+            quota_source = "个人账号"
 
         balance_before = user.balance_cpu_hours
 
         # 统一的核时系统：直接从 balance_cpu_hours 扣费
-        # 如果 balance < 0，表示欠费
+        # 注意：这里扣除的是核时数,不是金额
         user.balance_cpu_hours -= total_cpu_hours
 
         if user.balance_cpu_hours >= 0:
@@ -340,7 +485,7 @@ class BillingService:
             balance_after=user.balance_cpu_hours,
             reference_id=job.id,
             reference_type="job",
-            description=f"任务 #{job.id} 消耗 {total_cpu_hours:.2f} 核时 (MD: {job.actual_cpu_hours:.2f}h + RESP: {job.resp_cpu_hours:.2f}h)"
+            description=f"MD任务 #{job.id} 消耗 {total_cpu_hours:.2f} 核时 (单价:{task_price:.2f}¥/h, 折扣:{discount_rate:.2f}, 配额来源:{quota_source}, 费用:{final_cost:.2f}¥)"
         )
         db.add(trans)
 
@@ -377,7 +522,7 @@ class BillingService:
         job.billed = True
         db.commit()
 
-        return True, f"结算完成，消耗 {total_cpu_hours:.2f} 核时 (MD: {job.actual_cpu_hours:.2f}h + RESP: {job.resp_cpu_hours:.2f}h)"
+        return True, f"结算完成，消耗 {total_cpu_hours:.2f} 核时，费用 {final_cost:.2f}¥ (单价:{task_price:.2f}¥/h × 折扣:{discount_rate:.2f})"
 
     @staticmethod
     def get_transactions(db: Session, user_id: int, skip: int = 0, limit: int = 20):
@@ -585,6 +730,7 @@ class BillingService:
         QC任务完成后结算
         
         处理独立提交的QC计算任务的计费
+        应用QC任务类型定价和用户折扣
         
         Args:
             db: 数据库会话
@@ -618,6 +764,20 @@ class BillingService:
             db.commit()
             return True, "无需扣费（核时为0）"
         
+        # 使用差异化定价计算费用
+        from app.services.pricing_service import PricingService
+        
+        final_cost = PricingService.calculate_final_price(
+            db=db,
+            task_type='QC',
+            cpu_hours=cpu_hours,
+            user_id=user.id
+        )
+        
+        # 获取定价详情
+        task_price = PricingService.get_task_type_price(db, 'QC')
+        discount_rate = PricingService.get_user_discount_rate(db, user.id)
+        
         balance_before = user.balance_cpu_hours
         
         # 统一的核时系统：直接从 balance_cpu_hours 扣费
@@ -632,7 +792,7 @@ class BillingService:
             balance_after=user.balance_cpu_hours,
             reference_id=qc_job.id,
             reference_type="qc_job",
-            description=f"QC任务 #{qc_job.id} ({qc_job.molecule_name}) 消耗 {cpu_hours:.2f} 核时"
+            description=f"QC任务 #{qc_job.id} ({qc_job.molecule_name}) 消耗 {cpu_hours:.2f} 核时 (单价:{task_price:.2f}¥/h, 折扣:{discount_rate:.2f}, 费用:{final_cost:.2f}¥)"
         )
         db.add(trans)
         
@@ -665,6 +825,5 @@ class BillingService:
         qc_job.billed = True
         db.commit()
         
-        logger.info(f"QC job {qc_job.id} settled: {cpu_hours:.2f} hours, balance: {user.balance_cpu_hours:.2f}")
-        return True, f"结算完成，消耗 {cpu_hours:.2f} 核时"
-
+        logger.info(f"QC job {qc_job.id} settled: {cpu_hours:.2f} hours, cost: {final_cost:.2f}¥, balance: {user.balance_cpu_hours:.2f}")
+        return True, f"结算完成，消耗 {cpu_hours:.2f} 核时，费用 {final_cost:.2f}¥ (单价:{task_price:.2f}¥/h × 折扣:{discount_rate:.2f})"

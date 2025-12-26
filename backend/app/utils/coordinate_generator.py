@@ -12,7 +12,7 @@
 """
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class CoordinateGenerationResult:
     xyz_content: str
     source: str  # "standard_dg", "etkdg", "uff", "xtb", "random", "user"
     quality: str  # "excellent", "good", "acceptable", "poor"
-    warnings: list[str]
+    warnings: List[str]
     min_distance: float
     max_distance: float
     energy: Optional[float] = None

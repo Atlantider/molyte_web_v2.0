@@ -29,6 +29,8 @@ export interface UserListItem {
   last_login_at: string | null;
   created_at: string;
   custom_cpu_hour_price?: number | null;
+  billing_mode?: 'CORE_HOUR' | 'TASK_TYPE';
+  custom_task_prices?: Record<string, number> | null;
 }
 
 export interface UserDetail extends UserListItem {
@@ -55,6 +57,8 @@ export interface UserUpdate {
   allowed_partitions?: string[] | null;
   allowed_modules?: string[] | null;
   custom_cpu_hour_price?: number | null;
+  billing_mode?: 'CORE_HOUR' | 'TASK_TYPE';
+  custom_task_prices?: Record<string, number> | null;
 }
 
 export interface UserCreate {

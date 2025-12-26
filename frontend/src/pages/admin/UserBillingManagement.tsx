@@ -24,6 +24,7 @@ import {
   Tooltip,
   Divider,
   Spin,
+  Segmented,
 } from 'antd';
 
 const { Title, Text } = Typography;
@@ -36,10 +37,23 @@ import {
   CrownOutlined,
   HistoryOutlined,
   BarChartOutlined,
+  AppstoreOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import AdminNav from '../../components/AdminNav';
 import { useThemeStore } from '../../stores/themeStore';
 import apiClient from '../../api/client';
+import {
+  adminGetBillingConfig,
+  adminUpdateBillingConfig,
+  adminGetTaskTypePrices,
+  adminUpdateTaskTypePrice,
+  adminGetUserTypePrices,
+  adminUpdateUserTypePrice,
+  type BillingConfig,
+  type TaskTypePrice,
+  type UserTypePrice,
+} from '../../api/pricing';
 import type { User } from '../../types';
 
 interface UserBillingInfo extends User {
@@ -103,6 +117,13 @@ const UserBillingManagement: React.FC = () => {
     averageMoney: 0,
   });
 
+  // 新计费模型状态
+  const [billingConfig, setBillingConfig] = useState<BillingConfig>({
+    pricing_mode: 'CORE_HOUR',
+  });
+  const [taskPrices, setTaskPrices] = useState<TaskTypePrice[]>([]);
+  const [userPrices, setUserPrices] = useState<UserTypePrice[]>([]);
+
   // 编辑状态
   const [editingUser, setEditingUser] = useState<UserBillingInfo | null>(null);
   const [editingPrice, setEditingPrice] = useState<number | null>(null);
@@ -157,6 +178,20 @@ const UserBillingManagement: React.FC = () => {
         average: averageConsumption,
         averageMoney: averageMoney,
       });
+
+      // 加载新计费模型数据
+      try {
+        const [configRes, tasksRes, usersRes] = await Promise.all([
+          adminGetBillingConfig(),
+          adminGetTaskTypePrices(),
+          adminGetUserTypePrices(),
+        ]);
+        setBillingConfig(configRes);
+        setTaskPrices(tasksRes);
+        setUserPrices(usersRes);
+      } catch (pricingError) {
+        console.error('❌ Failed to load pricing config:', pricingError);
+      }
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载数据失败');
     } finally {
@@ -245,6 +280,35 @@ const UserBillingManagement: React.FC = () => {
     setEditingGlobalPrice(pricingConfig.global_price);
   };
 
+  // 新计费模型处理函数
+  const handleBillingModeChange = async (mode: string) => {
+    try {
+      await adminUpdateBillingConfig({ pricing_mode: mode as 'CORE_HOUR' | 'TASK_TYPE' });
+      setBillingConfig({ ...billingConfig, pricing_mode: mode as 'CORE_HOUR' | 'TASK_TYPE' });
+      message.success('计费模式已更新');
+    } catch (error: any) {
+      message.error('更新失败: ' + (error.message || '未知错误'));
+    }
+  };
+
+  const handleTaskPriceUpdate = async (taskType: string, price: number) => {
+    try {
+      await adminUpdateTaskTypePrice(taskType, price);
+      message.success('任务类型价格已更新');
+    } catch (error: any) {
+      message.error('更新失败: ' + (error.message || '未知错误'));
+    }
+  };
+
+  const handleUserPriceUpdate = async (userType: string, price: number) => {
+    try {
+      await adminUpdateUserTypePrice(userType, price);
+      message.success('用户类型核时单价已更新');
+    } catch (error: any) {
+      message.error('更新失败: ' + (error.message || '未知错误'));
+    }
+  };
+
   // 用户列表列定义
   const userColumns = [
     {
@@ -283,28 +347,36 @@ const UserBillingManagement: React.FC = () => {
       },
     },
     {
-      title: '全局价格',
-      dataIndex: 'role',
-      key: 'global_price',
-      width: 100,
-      render: (role: string) => `¥${pricingConfig.role_prices[role] || pricingConfig.global_price}`,
-    },
-    {
-      title: '自定义价格',
-      dataIndex: 'custom_cpu_hour_price',
-      key: 'custom_price',
+      title: '计费模式',
+      key: 'billing_mode',
       width: 120,
-      render: (price: number | undefined) => (
-        price ? <Tag color="green">¥{price}</Tag> : <Tag>-</Tag>
-      ),
+      render: (_: any, record: UserBillingInfo) => {
+        const mode = (record as any).billing_mode || 'CORE_HOUR';
+        if (mode === 'TASK_TYPE') {
+          return <Tag color="purple">按任务</Tag>;
+        }
+        return <Tag color="blue">按核时</Tag>;
+      },
     },
     {
       title: '生效价格',
       key: 'effective_price',
-      width: 100,
+      width: 140,
       render: (_: any, record: UserBillingInfo) => {
-        const price = record.custom_cpu_hour_price || pricingConfig.role_prices[record.role] || pricingConfig.global_price;
-        return <strong>¥{price}</strong>;
+        const mode = (record as any).billing_mode || 'CORE_HOUR';
+        if (mode === 'TASK_TYPE') {
+          const customPrices = (record as any).custom_task_prices;
+          if (customPrices && Object.keys(customPrices).length > 0) {
+            return <Tag color="orange">任务(自定义)</Tag>;
+          }
+          return <Tag color="purple">任务(标准)</Tag>;
+        }
+        // CORE_HOUR mode
+        if (record.custom_cpu_hour_price) {
+          return <Tag color="orange">¥{record.custom_cpu_hour_price}/h (自定义)</Tag>;
+        }
+        const rolePrice = pricingConfig.role_prices[record.role] || pricingConfig.global_price;
+        return <span>¥{rolePrice}/h (标准)</span>;
       },
     },
     {
@@ -333,12 +405,12 @@ const UserBillingManagement: React.FC = () => {
           {record.custom_cpu_hour_price && (
             <Popconfirm
               title="确定删除自定义定价？"
-              description={`删除后，${record.username} 将恢复使用全局定价 ¥${pricingConfig.global_price}/核时`}
+              description={`删除后，${record.username} 将恢复使用标准定价`}
               onConfirm={() => handleDeletePrice(record.id, record.username)}
               okText="确定删除"
               cancelText="取消"
             >
-              <Tooltip title="删除自定义定价，恢复为全局定价">
+              <Tooltip title="删除自定义定价，恢复为标准定价">
                 <Button type="link" size="small" danger icon={<DeleteOutlined />} />
               </Tooltip>
             </Popconfirm>
@@ -427,115 +499,200 @@ const UserBillingManagement: React.FC = () => {
               {
                 key: 'pricing',
                 label: <span><DollarOutlined /> 定价管理</span>,
-                children: (
-                  <div style={{ padding: '20px 0' }}>
-                    <Row gutter={[16, 16]}>
-                      <Col xs={24} md={12}>
+                children: (() => {
+                  const taskNames: Record<string, { name: string; icon: string; color: string }> = {
+                    FORCEFIELD: { name: '力场生成', icon: '🧲', color: '#722ed1' },
+                    MD: { name: 'MD计算', icon: '⚛️', color: '#13c2c2' },
+                    POSTPROCESS: { name: '后处理', icon: '📊', color: '#52c41a' },
+                    QC: { name: 'QC计算', icon: '🔬', color: '#1890ff' },
+                    REACTION_NETWORK: { name: '反应网络', icon: '🔗', color: '#fa8c16' },
+                  };
+
+                  const userNames: Record<string, { name: string; icon: string; color: string }> = {
+                    ADMIN: { name: '管理员', icon: '👑', color: '#722ed1' },
+                    GUEST: { name: '访客', icon: '👤', color: '#8c8c8c' },
+                    USER: { name: '普通用户', icon: '👥', color: '#1890ff' },
+                    PREMIUM: { name: '高级用户', icon: '⭐', color: '#faad14' },
+                  };
+
+                  return (
+                    <div style={{ padding: '20px 0' }}>
+                      {/* 计费模式选择 */}
+                      <Card bordered={false} style={{ marginBottom: 24 }}>
+                        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                          <div>
+                            <Text strong style={{ display: 'block', marginBottom: 12, fontSize: 16 }}>
+                              计费模式
+                            </Text>
+                            <Segmented
+                              value={billingConfig.pricing_mode}
+                              onChange={handleBillingModeChange}
+                              block
+                              size="large"
+                              options={[
+                                {
+                                  label: (
+                                    <div style={{ padding: '8px 24px', textAlign: 'center' }}>
+                                      <DollarOutlined style={{ fontSize: 20, display: 'block', marginBottom: 8 }} />
+                                      <div>按核时计费</div>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        不同用户类型不同单价
+                                      </Text>
+                                    </div>
+                                  ),
+                                  value: 'CORE_HOUR',
+                                },
+                                {
+                                  label: (
+                                    <div style={{ padding: '8px 24px', textAlign: 'center' }}>
+                                      <AppstoreOutlined style={{ fontSize: 20, display: 'block', marginBottom: 8 }} />
+                                      <div>按任务计费</div>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        每种任务固定价格
+                                      </Text>
+                                    </div>
+                                  ),
+                                  value: 'TASK_TYPE',
+                                },
+                              ]}
+                            />
+                          </div>
+                        </Space>
+                      </Card>
+
+                      {/* 价格配置 */}
+                      {billingConfig.pricing_mode === 'CORE_HOUR' ? (
                         <Card
                           title={
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span>全局定价</span>
-                              {!isEditingGlobalPrice && (
-                                <Button
-                                  type="link"
-                                  icon={<EditOutlined />}
-                                  onClick={handleEditGlobalPrice}
-                                  size="small"
-                                >
-                                  编辑
-                                </Button>
-                              )}
-                            </div>
+                            <Space>
+                              <TeamOutlined />
+                              <span>用户类型核时单价</span>
+                            </Space>
                           }
                           bordered={false}
                         >
-                          <Form layout="vertical">
-                            <Form.Item label="全局核时单价 (元/核时)">
-                              {isEditingGlobalPrice ? (
-                                <Space.Compact style={{ width: '100%' }}>
-                                  <InputNumber
-                                    value={editingGlobalPrice}
-                                    onChange={(val) => setEditingGlobalPrice(val || 0.1)}
-                                    min={0.01}
-                                    max={10}
-                                    step={0.01}
-                                    style={{ flex: 1 }}
-                                  />
-                                  <Button type="primary" onClick={handleSaveGlobalPrice}>
-                                    保存
-                                  </Button>
-                                  <Button onClick={handleCancelEditGlobalPrice}>
-                                    取消
-                                  </Button>
-                                </Space.Compact>
-                              ) : (
-                                <InputNumber
-                                  value={pricingConfig.global_price}
-                                  disabled
-                                  style={{ width: '100%' }}
-                                />
-                              )}
-                            </Form.Item>
-                          </Form>
+                          <Row gutter={[16, 16]}>
+                            {userPrices.map((item) => {
+                              const config = userNames[item.user_type];
+                              return (
+                                <Col xs={24} sm={12} lg={6} key={item.user_type}>
+                                  <Card
+                                    size="small"
+                                    style={{
+                                      borderRadius: 8,
+                                      borderLeft: `4px solid ${config?.color || '#1890ff'}`,
+                                    }}
+                                  >
+                                    <Statistic
+                                      title={
+                                        <Space>
+                                          <span style={{ fontSize: 20 }}>{config?.icon}</span>
+                                          <span>{config?.name || item.user_type}</span>
+                                        </Space>
+                                      }
+                                      value={item.core_hour_price}
+                                      precision={2}
+                                      prefix="¥"
+                                      suffix="/核时"
+                                      valueStyle={{ fontSize: 24, fontWeight: 600 }}
+                                    />
+                                    <div style={{ marginTop: 12 }}>
+                                      <InputNumber
+                                        value={item.core_hour_price}
+                                        onChange={(v) => {
+                                          if (v !== null && v >= 0) {
+                                            setUserPrices((prev) =>
+                                              prev.map((p) =>
+                                                p.user_type === item.user_type
+                                                  ? { ...p, core_hour_price: v }
+                                                  : p
+                                              )
+                                            );
+                                          }
+                                        }}
+                                        onBlur={() => handleUserPriceUpdate(item.user_type, item.core_hour_price)}
+                                        prefix="¥"
+                                        suffix="/核时"
+                                        min={0}
+                                        step={0.1}
+                                        precision={2}
+                                        style={{ width: '100%' }}
+                                      />
+                                    </div>
+                                  </Card>
+                                </Col>
+                              );
+                            })}
+                          </Row>
                         </Card>
-                      </Col>
-                      <Col xs={24} md={12}>
+                      ) : (
                         <Card
-                          title="角色定价"
-                          bordered={false}
-                          extra={
-                            !isEditingRolePrices && (
-                              <Button
-                                type="link"
-                                size="small"
-                                onClick={handleEditRolePrices}
-                              >
-                                编辑
-                              </Button>
-                            )
+                          title={
+                            <Space>
+                              <ExperimentOutlined />
+                              <span>任务类型价格</span>
+                            </Space>
                           }
+                          bordered={false}
                         >
-                          {isEditingRolePrices ? (
-                            <Form layout="vertical">
-                              {Object.entries(editingRolePrices).map(([role, price]) => (
-                                <Form.Item
-                                  key={role}
-                                  label={role === 'ADMIN' ? '管理员' : role === 'PREMIUM' ? '高级用户' : role === 'USER' ? '普通用户' : '访客'}
-                                >
-                                  <InputNumber
-                                    value={price}
-                                    onChange={(val) => setEditingRolePrices({ ...editingRolePrices, [role]: val || 0 })}
-                                    min={0.01}
-                                    step={0.01}
-                                    precision={4}
-                                    style={{ width: '100%' }}
-                                  />
-                                </Form.Item>
-                              ))}
-                              <Form.Item>
-                                <Space>
-                                  <Button type="primary" onClick={handleSaveRolePrices}>
-                                    保存
-                                  </Button>
-                                  <Button onClick={handleCancelEditRolePrices}>
-                                    取消
-                                  </Button>
-                                </Space>
-                              </Form.Item>
-                            </Form>
-                          ) : (
-                            Object.entries(pricingConfig.role_prices).map(([role, price]) => (
-                              <div key={role} style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span>{role === 'ADMIN' ? '管理员' : role === 'PREMIUM' ? '高级用户' : role === 'USER' ? '普通用户' : '访客'}</span>
-                                <strong>¥{price}</strong>
-                              </div>
-                            ))
-                          )}
+                          <Row gutter={[16, 16]}>
+                            {taskPrices.map((item) => {
+                              const config = taskNames[item.task_type];
+                              return (
+                                <Col xs={24} sm={12} md={8} lg={6} key={item.task_type}>
+                                  <Card
+                                    size="small"
+                                    style={{
+                                      borderRadius: 8,
+                                      borderLeft: `4px solid ${config?.color || '#1890ff'}`,
+                                    }}
+                                  >
+                                    <Statistic
+                                      title={
+                                        <Space>
+                                          <span style={{ fontSize: 20 }}>{config?.icon}</span>
+                                          <span>{config?.name || item.task_type}</span>
+                                        </Space>
+                                      }
+                                      value={item.price_per_hour}
+                                      precision={2}
+                                      prefix="¥"
+                                      suffix="/任务"
+                                      valueStyle={{ fontSize: 24, fontWeight: 600 }}
+                                    />
+                                    <div style={{ marginTop: 12 }}>
+                                      <InputNumber
+                                        value={item.price_per_hour}
+                                        onChange={(v) => {
+                                          if (v !== null && v > 0) {
+                                            setTaskPrices((prev) =>
+                                              prev.map((p) =>
+                                                p.task_type === item.task_type
+                                                  ? { ...p, price_per_hour: v }
+                                                  : p
+                                              )
+                                            );
+                                          }
+                                        }}
+                                        onBlur={() => handleTaskPriceUpdate(item.task_type, item.price_per_hour)}
+                                        prefix="¥"
+                                        suffix="/任务"
+                                        min={0.01}
+                                        step={1}
+                                        precision={2}
+                                        style={{ width: '100%' }}
+                                      />
+                                    </div>
+                                  </Card>
+                                </Col>
+                              );
+                            })}
+                          </Row>
                         </Card>
-                      </Col>
-                    </Row>
-                  </div>
-                ),
+                      )}
+                    </div>
+                  );
+                })(),
               },
               {
                 key: 'recharge',

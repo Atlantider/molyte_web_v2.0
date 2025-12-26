@@ -1,9 +1,10 @@
 /**
  * 任务和配方信息展示组件
  */
-import React from 'react';
-import { Card, Descriptions, Space, Tag, theme } from 'antd';
-import type { MDJob, ElectrolyteSystem } from '../../types';
+import { Descriptions, Tag, Space, Typography, Tooltip, Card, theme } from 'antd';
+import { InfoCircleOutlined, ThunderboltOutlined, ExperimentOutlined } from '@ant-design/icons';
+import type { MDJob, ElectrolyteSystem } from '../../../types';
+import type { PartitionInfo } from '../../../api/slurm';
 
 interface JobInfoCardProps {
     job: MDJob;

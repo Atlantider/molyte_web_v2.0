@@ -16,7 +16,7 @@ import {
     theme,
     message,
 } from 'antd';
-import { ArrowLeftOutlined, Thun derboltOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ThunderboltOutlined, CheckCircleOutlined } from '@ant-design/icons';
 
 // Hooks
 import { useJobSubmit } from './hooks/useJobSubmit';

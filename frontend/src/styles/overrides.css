@@ -1,0 +1,165 @@
+/* Force text visibility for specific headers in light mode */
+html[data-theme='light'] .admin-dashboard-title,
+html[data-theme='light'] .formula-management-title,
+html[data-theme='light'] .job-management-title {
+    color: #1f1f1f !important;
+}
+
+html[data-theme='light'] .admin-dashboard-desc,
+html[data-theme='light'] .formula-management-desc,
+html[data-theme='light'] .job-management-desc {
+    color: #595959 !important;
+}
+
+/* Force KPI card text colors */
+html[data-theme='light'] .kpi-card-text {
+    color: #595959 !important;
+}
+
+/* Ensure no global overrides block this */
+:where(html[data-theme='light']) h1,
+:where(html[data-theme='light']) h2,
+:where(html[data-theme='light']) h3,
+:where(html[data-theme='light']) .ant-typography {
+    color: inherit;
+}
+
+/* =============================================================================
+   Global Typography Fixes (The "Nuclear" Option)
+   Forces all Ant Design titles and text to be dark in light mode,
+   overriding any stubborn global styles or theme token mismatches.
+   ============================================================================= */
+
+/* Main Headings (H1-H5) */
+html[data-theme='light'] h1.ant-typography,
+html[data-theme='light'] h2.ant-typography,
+html[data-theme='light'] h3.ant-typography,
+html[data-theme='light'] h4.ant-typography,
+html[data-theme='light'] h5.ant-typography,
+html[data-theme='light'] .ant-typography h1,
+html[data-theme='light'] .ant-typography h2,
+html[data-theme='light'] .ant-typography h3,
+html[data-theme='light'] .ant-typography h4,
+html[data-theme='light'] .ant-typography h5 {
+    color: #1f1f1f !important;
+}
+
+/* Body Text & Paragraphs */
+html[data-theme='light'] .ant-typography,
+html[data-theme='light'] span.ant-typography,
+html[data-theme='light'] div.ant-typography,
+html[data-theme='light'] p.ant-typography {
+    color: #1f1f1f !important;
+}
+
+/* Secondary/Description Text */
+html[data-theme='light'] .ant-typography-secondary,
+html[data-theme='light'] .ant-typography.ant-typography-secondary {
+    color: #595959 !important;
+}
+
+/* Card Titles & Metas */
+html[data-theme='light'] .ant-card-head-title,
+html[data-theme='light'] .ant-card-meta-title {
+    color: #1f1f1f !important;
+}
+
+html[data-theme='light'] .ant-card-head {
+    color: #1f1f1f !important;
+}
+
+html[data-theme='light'] .ant-card-meta-description {
+    color: #595959 !important;
+}
+
+/* Data Tables */
+html[data-theme='light'] .ant-table {
+    color: #1f1f1f !important;
+    background: transparent !important;
+}
+
+html[data-theme='light'] .ant-table-thead>tr>th {
+    color: #1f1f1f !important;
+    background: #fafafa !important;
+}
+
+html[data-theme='light'] .ant-table-tbody>tr>td {
+    color: #595959 !important;
+}
+
+html[data-theme='light'] .ant-table-cell {
+    color: inherit !important;
+}
+
+/* List Items & Descriptions */
+html[data-theme='light'] .ant-descriptions-title,
+html[data-theme='light'] .ant-descriptions-item-label,
+html[data-theme='light'] .ant-descriptions-item-content {
+    color: #595959 !important;
+}
+
+html[data-theme='light'] .ant-list-item-meta-title {
+    color: #1f1f1f !important;
+}
+
+html[data-theme='light'] .ant-list-item-meta-description {
+    color: #595959 !important;
+}
+
+/* Forms & Inputs */
+html[data-theme='light'] .ant-form-item-label>label {
+    color: #1f1f1f !important;
+}
+
+html[data-theme='light'] .ant-input,
+html[data-theme='light'] .ant-select-selector {
+    color: #1f1f1f !important;
+}
+
+/* Statistic Cards (common in Admin Dashboard) */
+html[data-theme='light'] .ant-statistic-title {
+    color: #595959 !important;
+}
+
+html[data-theme='light'] .ant-statistic-content,
+html[data-theme='light'] .ant-statistic-content-value {
+    color: #1f1f1f !important;
+}
+
+/* Global Text Fallback for any other containers */
+html[data-theme='light'] body {
+    color: #1f1f1f !important;
+}
+
+html[data-theme='light'] div {
+    color: inherit;
+}
+
+
+/* Ant Design Menu Items (AdminNav etc.) */
+html[data-theme='light'] .ant-menu {
+    color: #1f1f1f !important;
+    background: transparent !important;
+}
+
+html[data-theme='light'] .ant-menu-item,
+html[data-theme='light'] .ant-menu-submenu-title {
+    color: #595959 !important;
+}
+
+html[data-theme='light'] .ant-menu-item-selected {
+    color: #1677ff !important;
+}
+
+html[data-theme='light'] .ant-menu-title-content {
+    color: inherit !important;
+}
+
+/* Ensure links are visible but blue */
+html[data-theme='light'] a {
+    color: #1677ff;
+}
+
+html[data-theme='light'] a:hover {
+    color: #4096ff;
+}

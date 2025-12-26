@@ -25,7 +25,6 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import UserManagement from './pages/admin/UserManagement';
 import UserDetail from './pages/admin/UserDetail';
 import UserBillingManagement from './pages/admin/UserBillingManagement';
-import UserPricing from './pages/admin/UserPricing';
 import AccountManagement from './pages/admin/AccountManagement';
 import AuditLogs from './pages/admin/AuditLogs';
 import DataVisibilityAdmin from './pages/admin/DataVisibilityAdmin';
@@ -41,6 +40,7 @@ import SubAccountDetail from './pages/SubAccountDetail';
 import AccountCenter from './pages/AccountCenter';
 import NotificationCenter from './pages/NotificationCenter';
 import MasterAccountManagement from './pages/admin/MasterAccountManagement';
+import PricingConfig from './components/admin/PricingConfig';
 import ReactionNetworkJobs from './pages/ReactionNetworkJobs';
 import ReactionNetworkCreate from './pages/ReactionNetworkCreate';
 import ReactionNetworkDetail from './pages/ReactionNetworkDetail';
@@ -235,7 +235,7 @@ const router = createBrowserRouter([
       },
       {
         path: 'admin/pricing',
-        element: <UserPricing />,
+        element: <UserBillingManagement />,  // Redirected from old UserPricing
       },
       {
         path: 'admin/accounts',
@@ -252,6 +252,10 @@ const router = createBrowserRouter([
       {
         path: 'admin/master-accounts',
         element: <MasterAccountManagement />,
+      },
+      {
+        path: 'admin/pricing-config',
+        element: <PricingConfig />,  // 全局定价配置
       },
       {
         path: 'data-visibility',

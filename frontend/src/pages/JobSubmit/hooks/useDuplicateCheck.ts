@@ -4,9 +4,9 @@
  * 管理QC计算的重复检查逻辑
  */
 import { useState, useCallback } from 'react';
-import type { ElectrolyteSystem, MDJob } from '../../types';
-import type { DuplicateCheckResponse } from '../../api/qc';
-import { checkDuplicateCalculations } from '../../api/qc';
+import type { ElectrolyteSystem, MDJob } from '../../../types';
+import type { DuplicateCheckResponse } from '../../../api/qc';
+import { checkDuplicateCalculations } from '../../../api/qc';
 
 interface QCMoleculeParams {
     functional: string;

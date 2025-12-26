@@ -64,6 +64,9 @@ export interface QCJob {
   actual_cpu_hours?: number;
   // QC引擎选择
   qc_engine?: string;  // gaussian, pyscf
+  // 任务重试
+  retry_count?: number;
+  max_retries?: number;
 }
 
 // 精度等级

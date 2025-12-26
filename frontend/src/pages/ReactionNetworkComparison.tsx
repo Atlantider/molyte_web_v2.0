@@ -20,9 +20,8 @@ import {
     Progress
 } from 'antd';
 import {
-    CompareOutlined,
-    BarChartOutlined,
-    SwapOutlined
+    SwapOutlined,
+    BarChartOutlined
 } from '@ant-design/icons';
 import {
     BarChart,
@@ -81,7 +80,7 @@ const ReactionNetworkComparison: React.FC = () => {
 
     // 对比统计
     const getComparisonStats = () => {
-        if (!job1 || !job2) return null;
+        if (!job1 || !job2) return [];
 
         return [
             {
@@ -184,7 +183,7 @@ const ReactionNetworkComparison: React.FC = () => {
 
     return (
         <div style={{ padding: '24px' }}>
-            <Card title={<Space><CompareOutlined />反应网络对比分析</Space>}>
+            <Card title={<Space><BarChartOutlined />反应网络对比分析</Space>}>
                 <Alert
                     message="选择两个已完成的反应网络任务进行对比分析"
                     type="info"
@@ -203,7 +202,7 @@ const ReactionNetworkComparison: React.FC = () => {
                             placeholder="选择任务1"
                             showSearch
                             filterOption={(input, option) =>
-                                (option?.children as string).toLowerCase().includes(input.toLowerCase())
+                                String(option?.children).toLowerCase().includes(input.toLowerCase())
                             }
                         >
                             {availableJobs.map(job => (
@@ -227,7 +226,7 @@ const ReactionNetworkComparison: React.FC = () => {
                             placeholder="选择任务2"
                             showSearch
                             filterOption={(input, option) =>
-                                (option?.children as string).toLowerCase().includes(input.toLowerCase())
+                                String(option?.children).toLowerCase().includes(input.toLowerCase())
                             }
                         >
                             {availableJobs.map(job => (

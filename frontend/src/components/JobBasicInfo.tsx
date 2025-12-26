@@ -23,7 +23,7 @@ const { Text } = Typography;
 
 // 统一的设计风格常量（非颜色相关）
 const DASHBOARD_STYLES = {
-  cardBorderRadius: 12,
+  cardBorderRadius: 16, // 更现代的圆角
   cardPadding: 24,
   gutter: 24,
   titleFontSize: 16,
@@ -96,12 +96,12 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
       const start = dayjs(job.started_at);
       const diff = end.diff(start);
       const dur = dayjs.duration(diff);
-      
+
       const days = Math.floor(dur.asDays());
       const hours = dur.hours();
       const minutes = dur.minutes();
       const seconds = dur.seconds();
-      
+
       if (days > 0) {
         return `${days}天 ${hours}小时 ${minutes}分钟`;
       } else if (hours > 0) {
@@ -120,10 +120,10 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
     const nptSteps = job.config?.nsteps_npt || electrolyte.nsteps_npt || 0;
     const nvtSteps = job.config?.nsteps_nvt || electrolyte.nsteps_nvt || 0;
     const timestep = job.config?.timestep || electrolyte.timestep || 1.0;
-    
+
     const totalSteps = nptSteps + nvtSteps;
     const totalTime = (totalSteps * timestep) / 1000; // fs -> ps
-    
+
     return totalTime.toLocaleString(undefined, { maximumFractionDigits: 0 });
   };
 
@@ -153,8 +153,11 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
   const dashboardCardStyle = {
     background: token.colorBgContainer,
     borderRadius: DASHBOARD_STYLES.cardBorderRadius,
-    boxShadow: isDark ? '0 4px 12px rgba(0, 0, 0, 0.3)' : '0 4px 12px rgba(15, 23, 42, 0.08)',
-    border: `1px solid ${token.colorBorder}`,
+    boxShadow: isDark
+      ? '0 4px 12px rgba(0, 0, 0, 0.3)'
+      : '0 6px 16px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04)', // 更深、更柔和的阴影
+    border: isDark ? `1px solid ${token.colorBorder}` : 'none', // 浅色模式下去除边框，依靠阴影
+    transition: 'all 0.3s ease',
   };
 
   return (
@@ -167,8 +170,8 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
             style={dashboardCardStyle}
             title={
               <Space size={8}>
-                <DatabaseOutlined style={{ color: token.colorText }} />
-                <span style={{ fontSize: 14, fontWeight: 600, color: token.colorText }}>
+                <DatabaseOutlined style={{ color: '#1890ff', fontSize: 18 }} />
+                <span style={{ fontSize: 15, fontWeight: 600, color: token.colorTextHeading }}>
                   任务信息
                 </span>
               </Space>
@@ -177,7 +180,13 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
             <Row gutter={16}>
               {/* 左侧：基本信息 */}
               <Col xs={24} lg={12}>
-                <Descriptions column={1} size="small" bordered>
+                <Descriptions
+                  column={1}
+                  size="small"
+                  bordered
+                  labelStyle={{ width: '120px', background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
+                  contentStyle={{ fontWeight: 500 }}
+                >
                   <Descriptions.Item label="任务 ID">
                     <Text strong>#{job.id}</Text>
                   </Descriptions.Item>
@@ -210,7 +219,13 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
 
               {/* 右侧：时间信息 */}
               <Col xs={24} lg={12}>
-                <Descriptions column={1} size="small" bordered>
+                <Descriptions
+                  column={1}
+                  size="small"
+                  bordered
+                  labelStyle={{ width: '120px', background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
+                  contentStyle={{ fontWeight: 500 }}
+                >
                   <Descriptions.Item label="创建时间">
                     {dayjs(job.created_at).format('YYYY-MM-DD HH:mm:ss')}
                   </Descriptions.Item>
@@ -274,14 +289,19 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
             style={dashboardCardStyle}
             title={
               <Space size={8}>
-                <ExperimentOutlined style={{ color: token.colorText }} />
-                <span style={{ fontSize: 14, fontWeight: 600, color: token.colorText }}>
+                <ExperimentOutlined style={{ color: '#722ed1', fontSize: 18 }} />
+                <span style={{ fontSize: 15, fontWeight: 600, color: token.colorTextHeading }}>
                   溶液配方
                 </span>
               </Space>
             }
           >
-            <Descriptions column={2} size="small" bordered>
+            <Descriptions
+              column={2}
+              size="small"
+              bordered
+              labelStyle={{ background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
+            >
               <Descriptions.Item label="配方名称">
                 <Text strong>{electrolyte.name}</Text>
               </Descriptions.Item>
@@ -334,8 +354,8 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
             style={dashboardCardStyle}
             title={
               <Space size={8}>
-                <FundOutlined style={{ color: token.colorText }} />
-                <span style={{ fontSize: 14, fontWeight: 600, color: token.colorText }}>
+                <FundOutlined style={{ color: '#fa8c16', fontSize: 18 }} />
+                <span style={{ fontSize: 15, fontWeight: 600, color: token.colorTextHeading }}>
                   计算结果对比
                 </span>
               </Space>
@@ -353,7 +373,8 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
                     column={1}
                     size="small"
                     bordered
-                    title={<Text strong style={{ fontSize: 13 }}>初始设置</Text>}
+                    title={<Text strong style={{ fontSize: 14 }}>初始设置</Text>}
+                    labelStyle={{ background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
                   >
                     <Descriptions.Item label="初始浓度 (mol/L)">
                       <Text strong style={{ fontSize: 14 }}>
@@ -379,7 +400,8 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
                     column={1}
                     size="small"
                     bordered
-                    title={<Text strong style={{ fontSize: 13, color: '#1890ff' }}>计算结果</Text>}
+                    title={<Text strong style={{ fontSize: 14, color: '#1890ff' }}>计算结果</Text>}
+                    labelStyle={{ background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
                   >
                     <Descriptions.Item label="计算浓度 (mol/L)">
                       <Space direction="vertical" size={0}>
@@ -438,8 +460,8 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
             style={dashboardCardStyle}
             title={
               <Space size={8}>
-                <SettingOutlined style={{ color: token.colorText }} />
-                <span style={{ fontSize: 14, fontWeight: 600, color: token.colorText }}>
+                <SettingOutlined style={{ color: '#eb2f96', fontSize: 18 }} />
+                <span style={{ fontSize: 15, fontWeight: 600, color: token.colorTextHeading }}>
                   计算参数
                 </span>
               </Space>
@@ -448,7 +470,13 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
             <Row gutter={16}>
               {/* 左侧：模拟参数 */}
               <Col xs={24} lg={12}>
-                <Descriptions column={1} size="small" bordered title={<Text strong style={{ fontSize: 13 }}>模拟参数</Text>}>
+                <Descriptions
+                  column={1}
+                  size="small"
+                  bordered
+                  title={<Text strong style={{ fontSize: 14 }}>模拟参数</Text>}
+                  labelStyle={{ background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
+                >
                   <Descriptions.Item label="NPT 步数">
                     <Text>{(job.config?.nsteps_npt || electrolyte.nsteps_npt)?.toLocaleString() || '-'}</Text>
                   </Descriptions.Item>
@@ -466,7 +494,13 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
 
               {/* 右侧：系统参数 */}
               <Col xs={24} lg={12}>
-                <Descriptions column={1} size="small" bordered title={<Text strong style={{ fontSize: 13 }}>系统参数</Text>}>
+                <Descriptions
+                  column={1}
+                  size="small"
+                  bordered
+                  title={<Text strong style={{ fontSize: 14 }}>系统参数</Text>}
+                  labelStyle={{ background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
+                >
                   <Descriptions.Item label="力场">
                     <Tag color="purple">{electrolyte.force_field || 'OPLS-AA'}</Tag>
                   </Descriptions.Item>
@@ -486,93 +520,100 @@ export default function JobBasicInfo({ job, electrolyte, slurmStatus }: JobBasic
         </Col>
 
         {/* 5. QC计算配置（仅当启用QC时显示） */}
-        {job.config?.qc_enabled && (
-          <Col xs={24}>
-            <Card
-              className="dashboard-card"
-              style={{
-                ...dashboardCardStyle,
-                borderLeft: '4px solid #722ed1',
-              }}
-              title={
-                <Space size={8}>
-                  <ThunderboltOutlined style={{ color: '#722ed1' }} />
-                  <span style={{ fontSize: 14, fontWeight: 600, color: token.colorText }}>
-                    量子化学计算配置
-                  </span>
-                  <Tag color="purple">QC</Tag>
-                </Space>
-              }
-            >
-              <Descriptions column={2} size="small" bordered>
-                <Descriptions.Item label="精度等级">
-                  <Tag color={
-                    job.config.qc_accuracy_level === 'fast' ? 'green' :
-                    job.config.qc_accuracy_level === 'standard' ? 'blue' :
-                    job.config.qc_accuracy_level === 'accurate' ? 'orange' : 'purple'
-                  }>
-                    {job.config.qc_accuracy_level === 'fast' ? '快速' :
-                     job.config.qc_accuracy_level === 'standard' ? '标准' :
-                     job.config.qc_accuracy_level === 'accurate' ? '精确' : '自定义'}
-                  </Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="智能推荐">
-                  <Tag color={job.config.qc_use_recommended_params !== false ? 'green' : 'default'}>
-                    {job.config.qc_use_recommended_params !== false ? '已启用' : '未启用'}
-                  </Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="泛函">
-                  <Text code>{job.config.qc_functional || 'B3LYP'}</Text>
-                </Descriptions.Item>
-                <Descriptions.Item label="基组">
-                  <Text code>{job.config.qc_basis_set || '6-31++G(d,p)'}</Text>
-                </Descriptions.Item>
-                <Descriptions.Item label="溶剂模型">
-                  <Tag color={
-                    job.config.qc_solvent_model === 'gas' ? 'default' :
-                    job.config.qc_solvent_model === 'pcm' ? 'blue' : 'cyan'
-                  }>
-                    {job.config.qc_solvent_model === 'gas' ? '气相' :
-                     job.config.qc_solvent_model === 'pcm' ? 'PCM' :
-                     job.config.qc_solvent_model === 'smd' ? 'SMD' : job.config.qc_solvent_model}
-                  </Tag>
-                </Descriptions.Item>
-                {job.config.qc_solvent_model !== 'gas' && job.config.qc_solvent_name && (
-                  <Descriptions.Item label="隐式溶剂">
-                    <Text code>{job.config.qc_solvent_name}</Text>
-                  </Descriptions.Item>
-                )}
-                <Descriptions.Item label="待计算分子" span={2}>
-                  <Space size={[8, 8]} wrap>
-                    {electrolyte.cations?.map((mol, idx) => (
-                      <Tag key={`qc-cation-${idx}`} color="red">
-                        {mol.name}
-                      </Tag>
-                    ))}
-                    {electrolyte.anions?.map((mol, idx) => (
-                      <Tag key={`qc-anion-${idx}`} color="blue">
-                        {mol.name}
-                      </Tag>
-                    ))}
-                    {electrolyte.solvents?.map((mol, idx) => (
-                      <Tag key={`qc-solvent-${idx}`} color="green">
-                        {mol.name}
-                      </Tag>
-                    ))}
+        {
+          job.config?.qc_enabled && (
+            <Col xs={24}>
+              <Card
+                className="dashboard-card"
+                style={{
+                  ...dashboardCardStyle,
+                  borderLeft: '4px solid #722ed1',
+                }}
+                title={
+                  <Space size={8}>
+                    <ThunderboltOutlined style={{ color: '#722ed1', fontSize: 18 }} />
+                    <span style={{ fontSize: 15, fontWeight: 600, color: token.colorTextHeading }}>
+                      量子化学计算配置
+                    </span>
+                    <Tag color="purple">QC</Tag>
                   </Space>
-                </Descriptions.Item>
-              </Descriptions>
+                }
+              >
+                <Descriptions
+                  column={2}
+                  size="small"
+                  bordered
+                  labelStyle={{ background: isDark ? 'rgba(255,255,255,0.02)' : '#fafafa' }}
+                >
+                  <Descriptions.Item label="精度等级">
+                    <Tag color={
+                      job.config.qc_accuracy_level === 'fast' ? 'green' :
+                        job.config.qc_accuracy_level === 'standard' ? 'blue' :
+                          job.config.qc_accuracy_level === 'accurate' ? 'orange' : 'purple'
+                    }>
+                      {job.config.qc_accuracy_level === 'fast' ? '快速' :
+                        job.config.qc_accuracy_level === 'standard' ? '标准' :
+                          job.config.qc_accuracy_level === 'accurate' ? '精确' : '自定义'}
+                    </Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="智能推荐">
+                    <Tag color={job.config.qc_use_recommended_params !== false ? 'green' : 'default'}>
+                      {job.config.qc_use_recommended_params !== false ? '已启用' : '未启用'}
+                    </Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="泛函">
+                    <Text code>{job.config.qc_functional || 'B3LYP'}</Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="基组">
+                    <Text code>{job.config.qc_basis_set || '6-31++G(d,p)'}</Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="溶剂模型">
+                    <Tag color={
+                      job.config.qc_solvent_model === 'gas' ? 'default' :
+                        job.config.qc_solvent_model === 'pcm' ? 'blue' : 'cyan'
+                    }>
+                      {job.config.qc_solvent_model === 'gas' ? '气相' :
+                        job.config.qc_solvent_model === 'pcm' ? 'PCM' :
+                          job.config.qc_solvent_model === 'smd' ? 'SMD' : job.config.qc_solvent_model}
+                    </Tag>
+                  </Descriptions.Item>
+                  {job.config.qc_solvent_model !== 'gas' && job.config.qc_solvent_name && (
+                    <Descriptions.Item label="隐式溶剂">
+                      <Text code>{job.config.qc_solvent_name}</Text>
+                    </Descriptions.Item>
+                  )}
+                  <Descriptions.Item label="待计算分子" span={2}>
+                    <Space size={[8, 8]} wrap>
+                      {electrolyte.cations?.map((mol, idx) => (
+                        <Tag key={`qc-cation-${idx}`} color="red">
+                          {mol.name}
+                        </Tag>
+                      ))}
+                      {electrolyte.anions?.map((mol, idx) => (
+                        <Tag key={`qc-anion-${idx}`} color="blue">
+                          {mol.name}
+                        </Tag>
+                      ))}
+                      {electrolyte.solvents?.map((mol, idx) => (
+                        <Tag key={`qc-solvent-${idx}`} color="green">
+                          {mol.name}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </Descriptions.Item>
+                </Descriptions>
 
-              <div style={{ marginTop: 12 }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  💡 智能推荐：阴离子使用弥散函数(++)描述扩展电子密度，阳离子使用极化函数(d,p)描述极化效应。
-                </Text>
-              </div>
-            </Card>
-          </Col>
-        )}
-      </Row>
-    </div>
+                <div style={{ marginTop: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    💡 智能推荐：阴离子使用弥散函数(++)描述扩展电子密度，阳离子使用极化函数(d,p)描述极化效应。
+                  </Text>
+                </div>
+              </Card>
+            </Col>
+          )
+        }
+      </Row >
+    </div >
   );
 }
 

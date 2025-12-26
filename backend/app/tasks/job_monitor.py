@@ -188,6 +188,15 @@ def monitor_slurm_jobs_task(self) -> Dict[str, int]:
                     from app.tasks.postprocess import postprocess_md_job_task
                     logger.info(f"[Task {self.request.id}] Triggering postprocessing for job {job.id}")
                     postprocess_md_job_task.delay(job.id)
+                
+                # 如果任务被取消，立即结算（用户主动取消需要扣费）
+                if new_status == JobStatus.CANCELLED:
+                    try:
+                        from app.services.billing import BillingService
+                        success, message = BillingService.settle_job(db, job)
+                        logger.info(f"[Task {self.request.id}] Job {job.id} settlement after cancellation: {message}")
+                    except Exception as e:
+                        logger.error(f"[Task {self.request.id}] Failed to settle cancelled job {job.id}: {e}")
 
                 db.commit()
                 updated_count += 1

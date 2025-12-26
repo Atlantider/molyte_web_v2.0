@@ -2,7 +2,7 @@
 API v1 router
 """
 from fastapi import APIRouter
-from app.api.v1 import auth, users, projects, electrolytes, jobs, slurm, admin, research, billing, visibility, qc, user_preferences, batch_import, worker, desolvation, binding, redox, cluster_analysis, forcefield, ai_discovery, similarity_search, compensation, accounts, recharge_packages, notifications, sms
+from app.api.v1 import auth, users, projects, electrolytes, jobs, slurm, admin, research, billing, visibility, qc, user_preferences, batch_import, worker, desolvation, binding, redox, cluster_analysis, forcefield, ai_discovery, similarity_search, compensation, accounts, recharge_packages, notifications, sms, pricing
 
 api_router = APIRouter()
 
@@ -33,3 +33,4 @@ api_router.include_router(compensation.router, tags=["Compensation"])
 api_router.include_router(recharge_packages.router, tags=["Recharge Packages"])
 api_router.include_router(notifications.router, tags=["Notifications"])
 api_router.include_router(sms.router, tags=["SMS"])
+api_router.include_router(pricing.router, tags=["Pricing"])

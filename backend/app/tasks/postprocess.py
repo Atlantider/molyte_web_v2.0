@@ -197,15 +197,22 @@ def postprocess_md_job_task(self, job_id: int) -> Dict[str, Any]:
     except Exception as exc:
         logger.exception(f"[Task {self.request.id}] Exception during postprocessing: {exc}")
         
-        # 恢复状态为 COMPLETED（即使后处理失败，MD 任务本身是成功的）
+        # ✅ 即使后处理失败,也要结算任务(CRITICAL: 防止未计费)
         try:
             job = db.query(MDJob).filter(MDJob.id == job_id).first()
             if job:
+                # 先结算(必须执行)
+                if not job.billed:
+                    from app.services.billing import BillingService
+                    success, message = BillingService.settle_job(db, job)
+                    logger.info(f"[Task {self.request.id}] Job {job_id} settled after postprocess failure: {message}")
+                
+                # 再恢复状态
                 job.status = JobStatus.COMPLETED
                 job.error_message = f"Postprocessing failed: {str(exc)}"
                 db.commit()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"[Task {self.request.id}] Failed to settle job after postprocess failure: {e}")
         
         raise self.retry(exc=exc)
 

@@ -257,11 +257,13 @@ const UserManagement: React.FC = () => {
 
   const handleEdit = (user: UserListItem) => {
     setEditingUser(user);
-    const isCustmom = user.custom_cpu_hour_price && user.custom_cpu_hour_price > 0;
+    const billingModeType = user.billing_mode || 'CORE_HOUR';
+    const isCustomCoreHour = user.custom_cpu_hour_price && user.custom_cpu_hour_price > 0;
     form.setFieldsValue({
       ...user,
-      billing_mode: isCustmom ? 'custom' : 'role',
-      custom_price: isCustmom ? user.custom_cpu_hour_price : undefined,
+      billing_mode_type: billingModeType,
+      billing_mode: isCustomCoreHour ? 'custom' : 'role',
+      custom_price: isCustomCoreHour ? user.custom_cpu_hour_price : undefined,
     });
     setModalVisible(true);
   };
@@ -273,19 +275,31 @@ const UserManagement: React.FC = () => {
       // 处理计费方式
       const updateData: any = { ...values };
 
-      // 根据计费方式设置 custom_cpu_hour_price
-      if (values.billing_mode === 'custom') {
-        if (values.custom_price === undefined || values.custom_price === null) {
-          message.error('请输入自定义价格');
-          return;
+      // 设置 billing_mode (CORE_HOUR or TASK_TYPE)
+      updateData.billing_mode = values.billing_mode_type;
+
+      // 根据计费模式处理价格
+      if (values.billing_mode_type === 'CORE_HOUR') {
+        if (values.billing_mode === 'custom') {
+          if (values.custom_price === undefined || values.custom_price === null) {
+            message.error('请输入自定义价格');
+            return;
+          }
+          updateData.custom_cpu_hour_price = values.custom_price;
+        } else {
+          // 按用户类型计费时，清除自定义价格
+          updateData.custom_cpu_hour_price = null;
         }
-        updateData.custom_cpu_hour_price = values.custom_price;
+        // 清除任务价格自定义
+        updateData.custom_task_prices = null;
       } else {
-        // 按角色计费时，设置为 null
+        // 任务类型计费
         updateData.custom_cpu_hour_price = null;
+        // custom_task_prices 暂时保持原样，后续可单独配置
       }
 
-      delete updateData.billing_mode;
+      // 删除临时表单字段
+      delete updateData.billing_mode_type;
       delete updateData.custom_price;
 
       if (editingUser) {
@@ -512,14 +526,28 @@ const UserManagement: React.FC = () => {
     {
       title: '计费方式',
       key: 'pricing',
-      width: 120,
+      width: 140,
       render: (_: any, record: UserListItem) => {
+        const billingMode = record.billing_mode || 'CORE_HOUR';
+        if (billingMode === 'TASK_TYPE') {
+          return (
+            <Tag color="purple" style={{ margin: 0, fontSize: '12px' }}>
+              按任务
+              {record.custom_task_prices && Object.keys(record.custom_task_prices).length > 0 && (
+                <span style={{ marginLeft: 4, opacity: 0.7 }}>(自定义)</span>
+              )}
+            </Tag>
+          );
+        }
+        // CORE_HOUR mode
         return (
           <>
             {record.custom_cpu_hour_price ? (
-              <Tag color="orange" style={{ margin: 0, fontSize: '12px' }}>自定义</Tag>
+              <Tag color="orange" style={{ margin: 0, fontSize: '12px' }}>
+                核时(¥{record.custom_cpu_hour_price})
+              </Tag>
             ) : (
-              <Tag color="blue" style={{ margin: 0, fontSize: '12px' }}>按角色</Tag>
+              <Tag color="blue" style={{ margin: 0, fontSize: '12px' }}>核时(标准)</Tag>
             )}
           </>
         );
@@ -1010,79 +1038,123 @@ const UserManagement: React.FC = () => {
             </Select>
           </Form.Item>
 
-          {/* 计费方式设置 */}
+          {/* 计费模式设置 */}
           <Form.Item
-            name="billing_mode"
+            name="billing_mode_type"
             label={
               <Space size={4}>
                 <DollarOutlined style={{ color: token.colorPrimary }} />
-                <span>计费方式</span>
+                <span>计费模式</span>
               </Space>
             }
-            initialValue="role"
+            initialValue="CORE_HOUR"
           >
-            <Select onChange={() => form.validateFields(['custom_price'])}>
-              <Select.Option value="role">按角色计费</Select.Option>
-              <Select.Option value="custom">自定义计费</Select.Option>
+            <Select onChange={() => form.validateFields(['custom_price', 'billing_mode'])}>
+              <Select.Option value="CORE_HOUR">按核时计费</Select.Option>
+              <Select.Option value="TASK_TYPE">按任务类型计费</Select.Option>
             </Select>
           </Form.Item>
 
-          {/* 显示角色定价规则 */}
+          {/* 核时计费选项 */}
           <Form.Item
             noStyle
             shouldUpdate
           >
             {({ getFieldValue }) => {
-              const billingMode = getFieldValue('billing_mode');
-              const userRole = getFieldValue('role');
-              if (billingMode === 'role' && userRole) {
-                const rolePrice = pricingConfig.role_prices?.[userRole] || pricingConfig.global_price;
-                return (
-                  <div style={{
-                    padding: '12px',
-                    backgroundColor: '#f0f5ff',
-                    borderRadius: '4px',
-                    marginBottom: '16px',
-                    fontSize: '12px',
-                    color: '#0050b3'
-                  }}>
-                    <div style={{ marginBottom: '8px', fontWeight: 500 }}>
-                      按角色定价规则：
-                    </div>
-                    <div style={{ marginBottom: '4px' }}>
-                      当前用户角色 <strong>{userRole === 'ADMIN' ? '管理员' : userRole === 'PREMIUM' ? '高级' : userRole === 'USER' ? '普通' : '访客'}</strong> 的定价为：
-                    </div>
-                    <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#1890ff' }}>
-                      ¥{rolePrice.toFixed(4)}/核时
-                    </div>
-                  </div>
-                );
-              }
-              return null;
+              const billingModeType = getFieldValue('billing_mode_type');
+              if (billingModeType !== 'CORE_HOUR') return null;
+              return (
+                <>
+                  <Form.Item
+                    name="billing_mode"
+                    label="核时定价方式"
+                    initialValue="role"
+                  >
+                    <Select onChange={() => form.validateFields(['custom_price'])}>
+                      <Select.Option value="role">按用户类型（标准）</Select.Option>
+                      <Select.Option value="custom">自定义核时单价</Select.Option>
+                    </Select>
+                  </Form.Item>
+
+                  {/* 显示用户类型定价规则 */}
+                  <Form.Item noStyle shouldUpdate>
+                    {({ getFieldValue: gfv }) => {
+                      const billingMode = gfv('billing_mode');
+                      const userRole = gfv('role');
+                      if (billingMode === 'role' && userRole) {
+                        const rolePrice = pricingConfig.role_prices?.[userRole] || pricingConfig.global_price;
+                        return (
+                          <div style={{
+                            padding: '12px',
+                            backgroundColor: isDark ? 'rgba(24, 144, 255, 0.1)' : '#f0f5ff',
+                            borderRadius: '4px',
+                            marginBottom: '16px',
+                            fontSize: '12px',
+                            color: isDark ? '#69b1ff' : '#0050b3'
+                          }}>
+                            <div style={{ marginBottom: '4px' }}>
+                              当前用户类型 <strong>{userRole === 'ADMIN' ? '管理员' : userRole === 'PREMIUM' ? '高级' : userRole === 'USER' ? '普通' : '访客'}</strong> 定价：
+                            </div>
+                            <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
+                              ¥{rolePrice.toFixed(4)}/核时
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  </Form.Item>
+
+                  {/* 自定义核时价格输入 */}
+                  <Form.Item noStyle shouldUpdate>
+                    {({ getFieldValue: gfv }) => {
+                      const billingMode = gfv('billing_mode');
+                      return billingMode === 'custom' ? (
+                        <Form.Item
+                          name="custom_price"
+                          label="自定义核时单价"
+                          rules={[{ required: true, message: '请输入自定义价格' }]}
+                        >
+                          <InputNumber
+                            min={0.01}
+                            step={0.01}
+                            precision={4}
+                            style={{ width: '100%' }}
+                            addonAfter="元/核时"
+                            placeholder="请输入价格"
+                          />
+                        </Form.Item>
+                      ) : null;
+                    }}
+                  </Form.Item>
+                </>
+              );
             }}
           </Form.Item>
 
+          {/* 任务类型计费选项 */}
           <Form.Item
             noStyle
             shouldUpdate
           >
             {({ getFieldValue }) => {
-              const billingMode = getFieldValue('billing_mode');
-              return billingMode === 'custom' ? (
-                <Form.Item
-                  name="custom_price"
-                  label="自定义价格"
-                  rules={[{ required: true, message: '请输入自定义价格' }]}
-                >
-                  <InputNumber
-                    min={0.01}
-                    step={0.01}
-                    precision={4}
-                    style={{ width: '100%' }}
-                    placeholder="请输入价格（元/核时）"
-                  />
-                </Form.Item>
-              ) : null;
+              const billingModeType = getFieldValue('billing_mode_type');
+              if (billingModeType !== 'TASK_TYPE') return null;
+              return (
+                <div style={{
+                  padding: '16px',
+                  backgroundColor: isDark ? 'rgba(114, 46, 209, 0.1)' : '#f9f0ff',
+                  borderRadius: '8px',
+                  marginBottom: '16px',
+                }}>
+                  <div style={{ marginBottom: '12px', fontWeight: 500, color: isDark ? '#b37feb' : '#722ed1' }}>
+                    任务类型计费说明
+                  </div>
+                  <div style={{ fontSize: '12px', color: isDark ? '#d3adf7' : '#531dab' }}>
+                    用户将按照任务类型的固定价格计费，而非核时。价格由系统全局设置，如需为此用户自定义，请在用户详情页单独配置。
+                  </div>
+                </div>
+              );
             }}
           </Form.Item>
         </Form>
